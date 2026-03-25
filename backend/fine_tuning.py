@@ -1,26 +1,30 @@
 """
-Fine-tuning engine using QLoRA (Quantized LoRA).
+Fine-tuning engine — QLoRA on your codebase.
 
-Как работает:
-1. Сканирует проект и извлекает пары (prompt → completion)
-   из docstrings, комментариев, сигнатур функций
-2. Загружает базовую модель в 4-bit
-3. Применяет LoRA адаптеры к attention-слоям
-4. Обучает только LoRA веса (~0.1% параметров)
-5. Сохраняет только адаптер (~50-100MB вместо гигабайтов)
+Strategies:
+  1. docstring/JSDoc → implementation
+  2. comment → following code block
+  3. file prefix → completion (file-level)
+  4. function signature → body
+  5. test → implementation (reverse TDD)
+
+Architecture:
+  - Loads base model in 4-bit (NF4)
+  - Applies LoRA adapters to Q/K/V/O attention projections
+  - Trains only LoRA weights (~0.1% of total params)
+  - Saves only the adapter (~50-100MB instead of GBs)
+  - Result: a model that speaks your codebase's dialect
 """
 
 import asyncio
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Глобальный статус дообучения
 _fine_tune_status = {
     "running": False,
     "progress": 0,
@@ -29,6 +33,8 @@ _fine_tune_status = {
     "loss": 0.0,
     "message": "Idle",
     "examples_count": 0,
+    "strategy_breakdown": {},
+    "adapter_path": None,
 }
 
 
@@ -38,16 +44,49 @@ class FineTuner:
         self.ft_config = config.get("fine_tuning", {})
         self.models_dir = Path(__file__).parent.parent / "models"
         self.data_dir = Path(__file__).parent.parent / "data"
+        self.adapter_dir = Path(__file__).parent.parent / self.ft_config.get("adapter_dir", "models/adapters")
 
     @staticmethod
     def get_status() -> dict:
         return _fine_tune_status.copy()
 
-    async def fine_tune(self, project_path: str, model_id: str, epochs: int = 3) -> dict:
+    @staticmethod
+    def list_adapters() -> list[dict]:
+        """List all available fine-tuned adapters."""
+        adapter_base = Path(__file__).parent.parent / "models" / "adapters"
+        adapters = []
+        if adapter_base.exists():
+            for d in adapter_base.iterdir():
+                if d.is_dir() and (d / "adapter_config.json").exists():
+                    meta_path = d / "training_meta.json"
+                    meta = {}
+                    if meta_path.exists():
+                        try:
+                            meta = json.loads(meta_path.read_text())
+                        except Exception:
+                            pass
+                    adapters.append({
+                        "id": d.name,
+                        "path": str(d),
+                        "model_id": meta.get("model_id", "unknown"),
+                        "examples": meta.get("num_examples", 0),
+                        "epochs": meta.get("epochs", 0),
+                        "project": meta.get("project_path", ""),
+                        "created_at": meta.get("created_at", ""),
+                    })
+        return adapters
+
+    async def fine_tune(self, project_path: str, model_id: str, epochs: int = 3,
+                        strategies: Optional[list[str]] = None) -> dict:
         global _fine_tune_status
 
         if _fine_tune_status["running"]:
             return {"status": "error", "message": "Fine-tuning already in progress"}
+
+        if strategies is None:
+            strategies = self.ft_config.get("strategies", [
+                "docstring_to_impl", "comment_to_code", "file_completion", "function_signature"
+            ])
 
         try:
             _fine_tune_status = {
@@ -56,162 +95,185 @@ class FineTuner:
                 "epoch": 0,
                 "total_epochs": epochs,
                 "loss": 0.0,
-                "message": "Preparing training data...",
+                "message": "Scanning project for training data...",
                 "examples_count": 0,
+                "strategy_breakdown": {},
+                "adapter_path": None,
             }
 
-            # ── Шаг 1: Подготовка данных ──
-            logger.info(f"Preparing fine-tuning data from {project_path}")
-            dataset = await self._prepare_dataset(project_path)
+            logger.info(f"Fine-tuning on {project_path} with strategies: {strategies}")
+
+            # Step 1: Extract training data
+            dataset, breakdown = await self._prepare_dataset(project_path, strategies)
 
             _fine_tune_status["examples_count"] = len(dataset)
-            _fine_tune_status["message"] = f"Prepared {len(dataset)} training examples"
+            _fine_tune_status["strategy_breakdown"] = breakdown
             _fine_tune_status["progress"] = 10
-            logger.info(f"Prepared {len(dataset)} training examples")
+            _fine_tune_status["message"] = (
+                f"Extracted {len(dataset)} examples. "
+                f"Breakdown: {', '.join(f'{k}:{v}' for k,v in breakdown.items())}"
+            )
 
-            if len(dataset) < 5:
-                _fine_tune_status.update({
-                    "running": False,
-                    "message": f"Not enough training data ({len(dataset)} examples). Need at least 5.",
-                })
-                return {
-                    "status": "error",
-                    "message": f"Not enough training examples ({len(dataset)}). Need at least 5.",
-                }
+            min_examples = self.ft_config.get("min_examples", 10)
+            if len(dataset) < min_examples:
+                msg = (
+                    f"Not enough training data ({len(dataset)} examples, need {min_examples}). "
+                    f"Add more docstrings/comments to your code."
+                )
+                _fine_tune_status.update({"running": False, "message": msg})
+                return {"status": "error", "message": msg}
 
-            # ── Шаг 2: Находим модель ──
+            # Step 2: Find model info
             model_info = None
             for m in self.config["models"]["available"]:
                 if m["id"] == model_id:
                     model_info = m
                     break
             if not model_info:
-                raise ValueError(f"Model {model_id} not found in config")
+                raise ValueError(f"Model {model_id} not found")
 
-            _fine_tune_status["message"] = "Loading base model for fine-tuning..."
+            _fine_tune_status["message"] = f"Loading {model_info['name']} for fine-tuning..."
             _fine_tune_status["progress"] = 15
 
-            # ── Шаг 3: Запускаем обучение ──
+            # Step 3: Train (runs in executor to not block event loop)
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
-                None,
-                lambda: self._fine_tune_sync(model_info, dataset, epochs)
+                None, lambda: self._fine_tune_sync(model_info, dataset, epochs, project_path)
             )
 
             _fine_tune_status.update({
                 "running": False,
                 "progress": 100,
-                "message": "Fine-tuning complete!",
+                "message": f"✅ Fine-tuning complete! Adapter saved to: {result.get('adapter_path', '')}",
+                "adapter_path": result.get("adapter_path"),
             })
 
             return result
 
         except Exception as e:
-            _fine_tune_status.update({
-                "running": False,
-                "message": f"Error: {str(e)}",
-            })
-            logger.error(f"Fine-tuning error: {e}")
+            _fine_tune_status.update({"running": False, "message": f"❌ Error: {str(e)}"})
+            logger.error(f"Fine-tuning error: {e}", exc_info=True)
             raise
 
-    async def _prepare_dataset(self, project_path: str) -> list[dict]:
-        """
-        Извлекает обучающие примеры из кодовой базы проекта.
+    # ─────────────────────────────────────────────
+    #  DATA EXTRACTION
+    # ─────────────────────────────────────────────
 
-        Стратегии извлечения:
-        1. docstring/JSDoc → реализация функции
-        2. начало файла → продолжение файла (completion)
-        3. комментарий → следующий блок кода
-        """
+    async def _prepare_dataset(self, project_path: str,
+                                strategies: list[str]) -> tuple[list[dict], dict]:
         dataset = []
-        project = Path(project_path)
-        supported_ext = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs"}
-        ignore_dirs = {"node_modules", ".git", "__pycache__", "venv", ".venv", "dist", "build"}
+        breakdown: dict[str, int] = {s: 0 for s in strategies}
 
+        project = Path(project_path)
+        supported_ext = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".cs", ".rb"}
+        ignore_dirs = {"node_modules", ".git", "__pycache__", "venv", ".venv", "dist", "build", "target"}
+
+        files = []
         for f in project.rglob("*"):
             if f.suffix not in supported_ext:
                 continue
             if any(ig in f.parts for ig in ignore_dirs):
                 continue
+            if f.stat().st_size > 200_000:  # skip files > 200KB
+                continue
+            files.append(f)
 
+        logger.info(f"Found {len(files)} source files")
+
+        for f in files:
             try:
-                content = f.read_text(encoding="utf-8", errors="ignore")
-                if len(content.strip()) < 50:
+                content = f.read_text(encoding="utf-8", errors="ignore").strip()
+                if len(content) < 50:
                     continue
-
                 rel_path = str(f.relative_to(project))
 
-                # ── Стратегия 1: docstring → implementation ──
-                examples = self._extract_docstring_examples(content, rel_path, f.suffix)
-                dataset.extend(examples)
+                if "docstring_to_impl" in strategies:
+                    ex = self._extract_docstring_examples(content, rel_path, f.suffix)
+                    dataset.extend(ex)
+                    breakdown["docstring_to_impl"] += len(ex)
 
-                # ── Стратегия 2: file completion ──
-                if len(content) > 100:
-                    lines = content.split('\n')
-                    if len(lines) > 10:
-                        mid = len(lines) // 2
-                        dataset.append({
-                            "text": f"# File: {rel_path}\n{content[:1500]}"
-                        })
+                if "comment_to_code" in strategies:
+                    ex = self._extract_comment_examples(content, rel_path, f.suffix)
+                    dataset.extend(ex)
+                    breakdown["comment_to_code"] += len(ex)
 
-                # ── Стратегия 3: comment → code ──
-                comment_examples = self._extract_comment_examples(content, rel_path, f.suffix)
-                dataset.extend(comment_examples)
+                if "file_completion" in strategies and len(content) > 200:
+                    ex = self._extract_file_completion(content, rel_path)
+                    dataset.extend(ex)
+                    breakdown["file_completion"] += len(ex)
+
+                if "function_signature" in strategies:
+                    ex = self._extract_signature_examples(content, rel_path, f.suffix)
+                    dataset.extend(ex)
+                    breakdown["function_signature"] += len(ex)
+
+                if "test_to_impl" in strategies:
+                    ex = self._extract_test_examples(content, rel_path, f.suffix)
+                    dataset.extend(ex)
+                    breakdown["test_to_impl"] += len(ex)
 
             except Exception as e:
-                logger.warning(f"Error processing {f}: {e}")
+                logger.warning(f"Error extracting from {f}: {e}")
 
-        logger.info(f"Extracted {len(dataset)} training examples")
-        return dataset
+        # Deduplicate
+        seen = set()
+        unique = []
+        for item in dataset:
+            key = item["text"][:100]
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+
+        logger.info(f"Total unique examples: {len(unique)} | breakdown: {breakdown}")
+        return unique, breakdown
 
     def _extract_docstring_examples(self, content: str, file_path: str, ext: str) -> list[dict]:
-        """Извлекает пары docstring → implementation"""
         examples = []
-
         if ext == ".py":
-            pattern = r'(def\s+\w+[^:]*:\s*\n\s*"""[^"]*""")\s*\n(.*?)(?=\ndef\s|\nclass\s|\Z)'
-            for match in re.finditer(pattern, content, re.DOTALL):
-                sig = match.group(1).strip()
-                impl = match.group(2).strip()
-                if len(impl) > 20:
-                    examples.append({
-                        "text": f"# File: {file_path}\n{sig}\n{impl[:800]}"
-                    })
+            # def func(...): \n """docstring""" \n body
+            pattern = r'(def\s+\w+[^:]*:\s*\n\s*"""[\s\S]*?""")([\s\S]*?)(?=\ndef\s|\nclass\s|\nasync\s+def\s|\Z)'
+            for m in re.finditer(pattern, content):
+                sig_doc = m.group(1).strip()
+                body = m.group(2).strip()
+                if len(body) > 20:
+                    examples.append({"text": f"# {file_path}\n{sig_doc}\n{body[:800]}"})
 
         elif ext in (".js", ".ts", ".tsx", ".jsx"):
-            pattern = r'(/\*\*[^*]*\*/)\s*\n\s*((?:export\s+)?(?:async\s+)?(?:function|const|class)\s+\w+[^{]*\{.*?)(?=\n(?:export|function|class|const|/\*\*)|\Z)'
-            for match in re.finditer(pattern, content, re.DOTALL):
-                jsdoc = match.group(1).strip()
-                impl = match.group(2).strip()
+            pattern = r'(/\*\*[\s\S]*?\*/)\s*\n\s*((?:export\s+)?(?:async\s+)?(?:function|const|class)\s+\w+[\s\S]*?\{[\s\S]*?)(?=\n(?:export|function|class|/\*\*)|\Z)'
+            for m in re.finditer(pattern, content):
+                jsdoc = m.group(1).strip()
+                impl = m.group(2).strip()
                 if len(impl) > 20:
-                    examples.append({
-                        "text": f"// File: {file_path}\n{jsdoc}\n{impl[:800]}"
-                    })
+                    examples.append({"text": f"// {file_path}\n{jsdoc}\n{impl[:800]}"})
 
+        elif ext == ".java":
+            pattern = r'(/\*\*[\s\S]*?\*/)\s*\n\s*((?:public|private|protected)[\s\S]*?\{[\s\S]*?)(?=\n\s*(?:public|private|protected|/\*\*)|\Z)'
+            for m in re.finditer(pattern, content):
+                javadoc = m.group(1).strip()
+                impl = m.group(2).strip()
+                if len(impl) > 20:
+                    examples.append({"text": f"// {file_path}\n{javadoc}\n{impl[:800]}"})
         return examples
 
     def _extract_comment_examples(self, content: str, file_path: str, ext: str) -> list[dict]:
-        """Извлекает пары comment → code block"""
         examples = []
         lines = content.split('\n')
-
-        comment_prefixes = {'#'} if ext == '.py' else {'//'}
+        prefixes = {'#'} if ext == '.py' else {'//'}
 
         i = 0
         while i < len(lines) - 1:
             line = lines[i].strip()
-            is_comment = any(line.startswith(p) for p in comment_prefixes)
+            is_comment = any(line.startswith(p) for p in prefixes) and len(line) > 15
 
-            if is_comment and len(line) > 10:
-                # Собираем блок кода после комментария
+            if is_comment:
                 code_lines = []
                 j = i + 1
-                while j < len(lines) and j < i + 20:
-                    next_line = lines[j].strip()
-                    if not next_line:
+                while j < min(len(lines), i + 25):
+                    nl = lines[j].strip()
+                    if not nl:
                         j += 1
                         continue
-                    if any(next_line.startswith(p) for p in comment_prefixes):
+                    if any(nl.startswith(p) for p in prefixes):
                         break
                     code_lines.append(lines[j])
                     j += 1
@@ -219,22 +281,76 @@ class FineTuner:
                 if len(code_lines) >= 2:
                     code_block = '\n'.join(code_lines)
                     if len(code_block) > 30:
-                        examples.append({
-                            "text": f"# File: {file_path}\n{line}\n{code_block[:500]}"
-                        })
+                        examples.append({"text": f"# {file_path}\n{line}\n{code_block[:500]}"})
                 i = j
             else:
                 i += 1
-
         return examples
 
-    def _fine_tune_sync(self, model_info: dict, dataset: list[dict], epochs: int) -> dict:
-        """Синхронное дообучение с QLoRA"""
+    def _extract_file_completion(self, content: str, file_path: str) -> list[dict]:
+        lines = content.split('\n')
+        if len(lines) < 15:
+            return []
+        examples = []
+        # Split at 1/3 and 2/3 points for variety
+        for frac in [0.33, 0.5, 0.67]:
+            split = int(len(lines) * frac)
+            prefix = '\n'.join(lines[:split])
+            suffix = '\n'.join(lines[split:split + 30])
+            if len(suffix) > 50:
+                examples.append({"text": f"# File: {file_path} (continuation)\n{prefix[-600:]}\n{suffix}"})
+        return examples
+
+    def _extract_signature_examples(self, content: str, file_path: str, ext: str) -> list[dict]:
+        examples = []
+        if ext == ".py":
+            pattern = r'((?:async\s+)?def\s+\w+\([^)]*\)(?:\s*->\s*\S+)?:)([\s\S]*?)(?=\n(?:async\s+)?def\s|\nclass\s|\Z)'
+            for m in re.finditer(pattern, content):
+                sig = m.group(1).strip()
+                body = m.group(2).strip()
+                if len(body) > 30:
+                    examples.append({"text": f"# {file_path}\n{sig}\n{body[:600]}"})
+        elif ext in (".ts", ".js"):
+            pattern = r'((?:export\s+)?(?:async\s+)?function\s+\w+\([^)]*\)(?::\s*\S+)?)\s*\{([\s\S]*?)(?=\n(?:export\s+)?(?:async\s+)?function|\nclass|\Z)'
+            for m in re.finditer(pattern, content):
+                sig = m.group(1).strip()
+                body = m.group(2).strip()
+                if len(body) > 30:
+                    examples.append({"text": f"// {file_path}\n{sig} {{\n{body[:600]}"})
+        return examples
+
+    def _extract_test_examples(self, content: str, file_path: str, ext: str) -> list[dict]:
+        """Extract test → implementation patterns (helps model understand test-driven code)."""
+        examples = []
+        test_indicators = ["test_", "it(", "describe(", "@Test", "func Test"]
+        if not any(ind in content for ind in test_indicators):
+            return examples
+
+        lines = content.split('\n')
+        # Grab test blocks as training examples
+        test_start_patterns = [
+            r'def test_\w+', r'it\([\'"]', r'test\([\'"]', r'describe\([\'"]'
+        ]
+        for i, line in enumerate(lines):
+            for pat in test_start_patterns:
+                if re.match(r'\s*' + pat, line):
+                    block = '\n'.join(lines[i:i + 30])
+                    if len(block) > 50:
+                        examples.append({"text": f"# {file_path} (test)\n{block[:600]}"})
+                    break
+        return examples[:10]  # limit per file
+
+    # ─────────────────────────────────────────────
+    #  TRAINING
+    # ─────────────────────────────────────────────
+
+    def _fine_tune_sync(self, model_info: dict, dataset: list[dict],
+                         epochs: int, project_path: str) -> dict:
         global _fine_tune_status
-
         import torch
+        import json
+        from datetime import datetime
 
-        # Проверяем доступность необходимых библиотек
         try:
             from transformers import (
                 AutoModelForCausalLM, AutoTokenizer,
@@ -245,19 +361,23 @@ class FineTuner:
             from datasets import Dataset
         except ImportError as e:
             raise RuntimeError(
-                f"Fine-tuning requires additional packages. Install them:\n"
-                f"pip install peft trl datasets\n"
-                f"Missing: {e}"
+                f"Missing packages. Run: pip install peft trl datasets\nMissing: {e}"
             )
 
         repo = model_info["repo"]
         model_id = model_info["id"]
-        output_dir = str(self.models_dir / f"{model_id}-finetuned")
+        project_name = Path(project_path).name
+
+        # Adapter saved per-project so multiple projects can coexist
+        import hashlib
+        proj_hash = hashlib.md5(project_path.encode()).hexdigest()[:8]
+        adapter_name = f"{model_id}__{project_name}__{proj_hash}"
+        adapter_path = str(self.adapter_dir / adapter_name)
+        Path(adapter_path).mkdir(parents=True, exist_ok=True)
 
         _fine_tune_status["message"] = "Loading tokenizer..."
         _fine_tune_status["progress"] = 20
 
-        # ── Tokenizer ──
         tokenizer = AutoTokenizer.from_pretrained(repo, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -265,14 +385,12 @@ class FineTuner:
         _fine_tune_status["message"] = "Loading base model..."
         _fine_tune_status["progress"] = 25
 
-        # ── Base model ──
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         if device == "cuda":
             try:
                 from transformers import BitsAndBytesConfig
                 from peft import prepare_model_for_kbit_training
-
                 quant_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
@@ -280,15 +398,11 @@ class FineTuner:
                     bnb_4bit_quant_type="nf4",
                 )
                 model = AutoModelForCausalLM.from_pretrained(
-                    repo,
-                    quantization_config=quant_config,
-                    device_map="auto",
-                    trust_remote_code=True,
+                    repo, quantization_config=quant_config,
+                    device_map="auto", trust_remote_code=True,
                 )
                 model = prepare_model_for_kbit_training(model)
-                logger.info("Base model loaded in 4-bit for QLoRA")
             except ImportError:
-                logger.warning("bitsandbytes not available, loading in full precision")
                 model = AutoModelForCausalLM.from_pretrained(
                     repo, trust_remote_code=True, torch_dtype=torch.float16,
                 )
@@ -300,16 +414,18 @@ class FineTuner:
         _fine_tune_status["message"] = "Applying LoRA adapters..."
         _fine_tune_status["progress"] = 30
 
-        # ── LoRA config ──
+        # Find target modules dynamically
+        target_modules = self._find_target_modules(model)
+        logger.info(f"LoRA target modules: {target_modules}")
+
         lora_config = LoraConfig(
             r=self.ft_config.get("lora_r", 16),
             lora_alpha=self.ft_config.get("lora_alpha", 32),
             lora_dropout=self.ft_config.get("lora_dropout", 0.05),
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            target_modules=target_modules,
         )
-
         model = get_peft_model(model, lora_config)
 
         trainable, total = 0, 0
@@ -317,13 +433,11 @@ class FineTuner:
             total += p.numel()
             if p.requires_grad:
                 trainable += p.numel()
-        logger.info(f"LoRA: trainable={trainable:,} / total={total:,} ({100*trainable/total:.2f}%)")
+        logger.info(f"LoRA: trainable={trainable:,} / total={total:,} ({100*trainable/total:.3f}%)")
 
         _fine_tune_status["message"] = "Preparing dataset..."
         _fine_tune_status["progress"] = 35
 
-        # ── Dataset ──
-        # Добавляем EOS токен к каждому примеру
         formatted = []
         for item in dataset:
             text = item["text"]
@@ -333,9 +447,8 @@ class FineTuner:
 
         hf_dataset = Dataset.from_list(formatted)
 
-        # ── Training args ──
         training_args = TrainingArguments(
-            output_dir=output_dir,
+            output_dir=adapter_path + "_checkpoints",
             num_train_epochs=epochs,
             per_device_train_batch_size=self.ft_config.get("batch_size", 2),
             gradient_accumulation_steps=self.ft_config.get("gradient_accumulation_steps", 4),
@@ -351,22 +464,24 @@ class FineTuner:
             remove_unused_columns=False,
         )
 
-        _fine_tune_status["message"] = "Training started..."
+        _fine_tune_status["message"] = "Training in progress..."
         _fine_tune_status["progress"] = 40
 
-        # ── Progress callback ──
         class ProgressCallback(TrainerCallback):
             def on_log(self, args, state, control, logs=None, **kwargs):
                 if state.global_step > 0 and logs:
                     progress = min(95, 40 + int(55 * state.global_step / max(state.max_steps, 1)))
                     _fine_tune_status.update({
                         "progress": progress,
-                        "epoch": int(state.epoch) if state.epoch else 0,
+                        "epoch": int(state.epoch or 0),
                         "loss": round(logs.get("loss", 0), 4),
-                        "message": f"Training... Step {state.global_step}/{state.max_steps}, Loss: {logs.get('loss', 0):.4f}",
+                        "message": (
+                            f"Training... step {state.global_step}/{state.max_steps} | "
+                            f"loss: {logs.get('loss', 0):.4f} | "
+                            f"epoch: {state.epoch:.2f}/{epochs}"
+                        ),
                     })
 
-        # ── Train! ──
         trainer = SFTTrainer(
             model=model,
             train_dataset=hf_dataset,
@@ -380,20 +495,59 @@ class FineTuner:
         logger.info("Starting training...")
         trainer.train()
 
-        # ── Save ──
-        _fine_tune_status["message"] = "Saving fine-tuned model..."
+        _fine_tune_status["message"] = "Saving adapter..."
         _fine_tune_status["progress"] = 97
 
-        model.save_pretrained(output_dir)
-        tokenizer.save_pretrained(output_dir)
+        model.save_pretrained(adapter_path)
+        tokenizer.save_pretrained(adapter_path)
 
-        logger.info(f"Fine-tuned model saved to {output_dir}")
+        # Save metadata for UI display
+        meta = {
+            "model_id": model_id,
+            "model_name": model_info["name"],
+            "project_path": project_path,
+            "project_name": project_name,
+            "num_examples": len(formatted),
+            "epochs": epochs,
+            "trainable_params": trainable,
+            "total_params": total,
+            "created_at": datetime.now().isoformat(),
+        }
+        (Path(adapter_path) / "training_meta.json").write_text(json.dumps(meta, indent=2))
 
+        logger.info(f"Adapter saved to {adapter_path}")
         return {
             "status": "ok",
-            "output_dir": output_dir,
+            "adapter_path": adapter_path,
+            "adapter_name": adapter_name,
             "num_examples": len(formatted),
             "epochs": epochs,
             "trainable_params": trainable,
             "total_params": total,
         }
+
+    def _find_target_modules(self, model) -> list[str]:
+        """Dynamically detect LoRA target modules for any model architecture."""
+        linear_names = set()
+        for name, module in model.named_modules():
+            try:
+                from torch.nn import Linear
+                if isinstance(module, Linear):
+                    parts = name.split('.')
+                    linear_names.add(parts[-1])
+            except Exception:
+                pass
+
+        # Priority: attention projections
+        preferred = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        found = [m for m in preferred if m in linear_names]
+        if found:
+            return found
+
+        # Fallback: common patterns
+        for pattern in [["query", "key", "value"], ["c_attn", "c_proj"]]:
+            if all(m in linear_names for m in pattern):
+                return pattern
+
+        # Last resort
+        return list(linear_names)[:4] if linear_names else ["q_proj", "v_proj"]

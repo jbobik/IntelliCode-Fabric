@@ -7,136 +7,159 @@
     <link rel="stylesheet" href="{{styleUri}}">
 </head>
 <body>
-    <!-- ═══════════ HEADER ═══════════ -->
-    <div class="header">
-        <div class="header-row">
-            <h3>🤖 AI Code Partner</h3>
-            <button class="btn-icon" id="settingsBtn" title="Settings">⚙️</button>
-        </div>
 
-        <!-- Model Selector -->
-        <div class="model-selector">
-            <label class="label-small">Model:</label>
-            <select class="model-select" id="modelSelect">
-                <option value="">Loading models...</option>
-            </select>
+<!-- ══════════════ TOP BAR ══════════════ -->
+<div class="topbar">
+    <div class="topbar-left">
+        <span class="logo-icon">⬡</span>
+        <span class="logo-text">Code Partner</span>
+    </div>
+    <div class="topbar-right">
+        <div class="status-pill" id="statusPill">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusLabel">offline</span>
         </div>
+        <button class="icon-btn" id="settingsToggle" title="Settings">⚙</button>
+    </div>
+</div>
 
-        <div class="header-buttons">
-            <button class="btn-small btn-primary" id="loadModelBtn" title="Load selected model into memory">
-                ▶ Load
-            </button>
-            <button class="btn-small" id="downloadModelBtn" title="Download model from HuggingFace">
-                ⬇ Download
-            </button>
-            <button class="btn-small" id="indexBtn" title="Index project files for RAG">
-                📁 Index
-            </button>
-            <button class="btn-small" id="clearBtn" title="Clear chat history">
-                🗑 Clear
-            </button>
+<!-- ══════════════ MODEL PANEL ══════════════ -->
+<div class="model-panel" id="modelPanel">
+
+    <!-- Active model display -->
+    <div class="active-model-row" id="activeModelRow">
+        <div class="active-model-info">
+            <span class="active-model-label">Model</span>
+            <span class="active-model-name" id="activeModelName">None loaded</span>
         </div>
+        <button class="pill-btn" id="changeModelBtn">Change ▾</button>
     </div>
 
-    <!-- ═══════════ STATUS BAR ═══════════ -->
-    <div class="status-bar">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Connecting to backend...</span>
+    <!-- Adapter badge (shown when fine-tuned adapter active) -->
+    <div class="adapter-badge-row" id="adapterBadgeRow" style="display:none">
+        <span class="adapter-tag">🎯 Fine-tuned:</span>
+        <span class="adapter-name" id="activeAdapterName">–</span>
+        <button class="adapter-remove" id="removeAdapterBtn" title="Remove adapter">✕</button>
     </div>
 
-    <!-- ═══════════ CHAT AREA ═══════════ -->
-    <div class="chat-container" id="chatContainer">
-        <!-- Welcome Screen -->
-        <div class="welcome" id="welcome">
-            <div class="welcome-icon">🤖</div>
-            <h2>Welcome to AI Code Partner</h2>
-            <p>Your local AI coding assistant with RAG, multi-agent system, and fine-tuning.</p>
+    <!-- Model picker dropdown (hidden by default) -->
+    <div class="model-picker" id="modelPicker" style="display:none">
+        <div class="picker-header">
+            <span>Select Model</span>
+            <button class="icon-btn" id="closePickerBtn">✕</button>
+        </div>
 
-            <div class="setup-steps">
-                <h4>Getting Started:</h4>
-                <ol>
-                    <li>
-                        <span class="step-icon">🖥️</span>
-                        Start the backend server
-                        <code>cd backend && python server.py</code>
-                    </li>
-                    <li>
-                        <span class="step-icon">📦</span>
-                        Select & load a model from the dropdown above
-                    </li>
-                    <li>
-                        <span class="step-icon">📁</span>
-                        Click <strong>Index</strong> to scan your project
-                    </li>
-                    <li>
-                        <span class="step-icon">💬</span>
-                        Start asking questions about your code!
-                    </li>
-                </ol>
+        <div class="picker-tiers" id="pickerTiers">
+            <!-- dynamically filled -->
+        </div>
+
+        <!-- Adapter selector -->
+        <div class="adapter-section" id="adapterSection" style="display:none">
+            <div class="adapter-section-title">
+                🎯 Fine-tuned Adapters
+                <span class="hint">(optional)</span>
             </div>
+            <div class="adapter-list" id="adapterList"></div>
+        </div>
 
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <span>🔍</span>
-                    <strong>RAG Search</strong>
-                    <small>Finds relevant code across your entire project</small>
-                </div>
-                <div class="feature-card">
-                    <span>🤝</span>
-                    <strong>Multi-Agent</strong>
-                    <small>Analyst, Coder, Refactor & Tester agents</small>
-                </div>
-                <div class="feature-card">
-                    <span>🏠</span>
-                    <strong>100% Local</strong>
-                    <small>Your code never leaves your machine</small>
-                </div>
-                <div class="feature-card">
-                    <span>🎯</span>
-                    <strong>Fine-Tuning</strong>
-                    <small>Train on your project's coding style</small>
-                </div>
+        <div class="picker-actions">
+            <button class="action-btn primary" id="loadSelectedBtn">▶ Load</button>
+            <button class="action-btn secondary" id="downloadSelectedBtn">⬇ Download</button>
+        </div>
+
+        <!-- Download progress -->
+        <div class="download-progress-wrap" id="downloadProgressWrap" style="display:none">
+            <div class="download-progress-label" id="downloadProgressLabel">Downloading…</div>
+            <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="downloadProgressBar" style="width:0%"></div>
             </div>
         </div>
     </div>
 
-    <!-- ═══════════ INPUT AREA ═══════════ -->
-    <div class="input-container">
-        <div class="input-wrapper">
-            <textarea
-                class="chat-input"
-                id="chatInput"
-                placeholder="Ask about your code... (Enter to send, Shift+Enter for new line)"
-                rows="1"
-            ></textarea>
-            <button class="send-btn" id="sendBtn" title="Send message (Enter)">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M1 1.5L15 8L1 14.5V9.5L10 8L1 6.5V1.5Z"/>
-                </svg>
-            </button>
-        </div>
-        <div class="quick-actions" id="quickActions">
-            <button class="quick-action" data-prompt="Where is authentication implemented in this project?">
-                🔐 Find auth
-            </button>
-            <button class="quick-action" data-prompt="Explain the overall architecture and main components of this project">
-                📐 Architecture
-            </button>
-            <button class="quick-action" data-prompt="Find potential bugs, security issues, or code smells in this project">
-                🐛 Find bugs
-            </button>
-            <button class="quick-action" data-prompt="Suggest improvements for code quality and maintainability">
-                ✨ Improve
-            </button>
-            <button class="quick-action" data-prompt="List all API endpoints/routes in this project">
-                🌐 API routes
-            </button>
-            <button class="quick-action" data-prompt="Show the database models/schema used in this project">
-                🗄️ DB schema
-            </button>
-        </div>
+    <!-- Quick action row -->
+    <div class="quick-header-row">
+        <button class="icon-text-btn" id="indexBtn" title="Index project">📁 Index</button>
+        <button class="icon-text-btn" id="fineTuneBtn" title="Fine-tune on project">🎯 Fine-tune</button>
+        <button class="icon-text-btn" id="clearBtn" title="Clear chat">🗑 Clear</button>
+    </div>
+</div>
+
+<!-- ══════════════ FINE-TUNE PANEL ══════════════ -->
+<div class="finetune-panel" id="finetunePanelEl" style="display:none">
+    <div class="panel-header">
+        <span>Fine-tune on Project</span>
+        <button class="icon-btn" id="closeFinetuneBtn">✕</button>
     </div>
 
-    <script src="{{scriptUri}}"></script>
+    <div class="ft-form">
+        <label class="ft-label">Base model for fine-tuning</label>
+        <select class="ft-select" id="ftModelSelect"></select>
+
+        <label class="ft-label">Epochs <span class="hint">(2-5 recommended)</span></label>
+        <input class="ft-input" type="number" id="ftEpochs" value="3" min="1" max="10">
+
+        <label class="ft-label">Training strategies</label>
+        <div class="ft-strategies" id="ftStrategies">
+            <label class="ft-check"><input type="checkbox" value="docstring_to_impl" checked> Docstring → Implementation</label>
+            <label class="ft-check"><input type="checkbox" value="comment_to_code" checked> Comment → Code</label>
+            <label class="ft-check"><input type="checkbox" value="file_completion" checked> File completion</label>
+            <label class="ft-check"><input type="checkbox" value="function_signature" checked> Signature → Body</label>
+            <label class="ft-check"><input type="checkbox" value="test_to_impl"> Test → Implementation</label>
+        </div>
+
+        <button class="action-btn primary full-width" id="startFtBtn">🚀 Start Fine-tuning</button>
+    </div>
+
+    <!-- Progress -->
+    <div class="ft-progress" id="ftProgress" style="display:none">
+        <div class="ft-progress-msg" id="ftProgressMsg">Preparing...</div>
+        <div class="progress-bar-track">
+            <div class="progress-bar-fill animated" id="ftProgressBar" style="width:0%"></div>
+        </div>
+        <div class="ft-stats" id="ftStats"></div>
+    </div>
+
+    <!-- Results -->
+    <div class="ft-result" id="ftResult" style="display:none"></div>
+</div>
+
+<!-- ══════════════ CHAT ══════════════ -->
+<div class="chat-area" id="chatArea">
+    <div class="welcome-state" id="welcomeState">
+        <div class="welcome-glyph">⬡</div>
+        <h3>AI Code Partner</h3>
+        <p>Your fully-local AI dev assistant. No API keys. No subscriptions. Your code never leaves your machine.</p>
+        <div class="welcome-steps">
+            <div class="step"><span class="step-num">1</span><span>Start backend: <code>cd backend && python server.py</code></span></div>
+            <div class="step"><span class="step-num">2</span><span>Select a model and click <strong>Load</strong></span></div>
+            <div class="step"><span class="step-num">3</span><span>Click <strong>📁 Index</strong> to scan your project</span></div>
+            <div class="step"><span class="step-num">4</span><span>Ask anything about your code!</span></div>
+        </div>
+    </div>
+    <!-- messages injected here -->
+</div>
+
+<!-- ══════════════ INPUT AREA ══════════════ -->
+<div class="input-area">
+    <div class="quick-prompts" id="quickPrompts">
+        <button class="qp-chip" data-prompt="Where is authentication implemented in this project?">🔐 Find auth</button>
+        <button class="qp-chip" data-prompt="Explain the overall architecture of this project">📐 Architecture</button>
+        <button class="qp-chip" data-prompt="Find potential bugs and security issues">🐛 Find bugs</button>
+        <button class="qp-chip" data-prompt="List all API endpoints in this project">🌐 API routes</button>
+        <button class="qp-chip" data-prompt="Suggest refactoring improvements for better code quality">✨ Improve</button>
+    </div>
+    <div class="input-row">
+        <textarea class="chat-input" id="chatInput"
+            placeholder="Ask about your code… (Enter to send)"
+            rows="1"></textarea>
+        <button class="send-btn" id="sendBtn">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                <path d="M3.105 2.289a.75.75 0 00-.826.95l1.414 4.925A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086l-1.414 4.926a.75.75 0 00.826.95 28.896 28.896 0 0015.293-7.154.75.75 0 000-1.115A28.897 28.897 0 003.105 2.289z"/>
+            </svg>
+        </button>
+    </div>
+</div>
+
+<script src="{{scriptUri}}"></script>
 </body>
 </html>

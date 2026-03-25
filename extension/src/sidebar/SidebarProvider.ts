@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _serverUrl: string;
     private _pendingMessages: any[] = [];
+    private _ftStatusInterval?: NodeJS.Timeout;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -14,64 +14,38 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this._serverUrl = serverUrl;
     }
 
-    public resolveWebviewView(
+    resolveWebviewView(
         webviewView: vscode.WebviewView,
         _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ) {
         this._view = webviewView;
-
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.joinPath(this._extensionUri, 'media'),
-            ],
+            localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'media')],
         };
-
         webviewView.webview.html = this._getHtml(webviewView.webview);
 
-        webviewView.webview.onDidReceiveMessage(async (message) => {
-            switch (message.type) {
-                case 'chat':
-                    await this._handleChat(message);
-                    break;
-                case 'selectModel':
-                    vscode.commands.executeCommand('aiCodePartner.selectModel');
-                    break;
-                case 'downloadModel':
-                    vscode.commands.executeCommand('aiCodePartner.downloadModel');
-                    break;
-                case 'indexProject':
-                    vscode.commands.executeCommand('aiCodePartner.indexProject');
-                    break;
-                case 'getModels':
-                    await this._sendModelList();
-                    break;
-                case 'loadModel':
-                    await this._loadModel(message.modelId);
-                    break;
-                case 'startDownload':
-                    await this._downloadModel(message.modelId);
-                    break;
-                case 'insertCode':
-                    this._insertCode(message.code);
-                    break;
-                case 'applyEdit':
-                    await this._applyEdit(message);
-                    break;
-                case 'fineTune':
-                    vscode.commands.executeCommand('aiCodePartner.fineTune');
-                    break;
+        webviewView.webview.onDidReceiveMessage(async (msg) => {
+            switch (msg.type) {
+                case 'chat': await this._handleChat(msg); break;
+                case 'getModels': await this._sendModelList(); break;
+                case 'getAdapters': await this._sendAdapterList(); break;
+                case 'loadModel': await this._loadModel(msg.modelId, msg.adapterId); break;
+                case 'startDownload': await this._downloadModel(msg.modelId); break;
+                case 'getDownloadProgress': await this._sendDownloadProgress(msg.modelId); break;
+                case 'indexProject': vscode.commands.executeCommand('aiCodePartner.indexProject'); break;
+                case 'fineTune': await this._startFineTune(msg.modelId, msg.epochs, msg.strategies); break;
+                case 'getFtStatus': await this._sendFtStatus(); break;
+                case 'insertCode': this._insertCode(msg.code); break;
             }
         });
 
-        for (const msg of this._pendingMessages) {
-            webviewView.webview.postMessage(msg);
-        }
+        for (const m of this._pendingMessages) webviewView.webview.postMessage(m);
         this._pendingMessages = [];
     }
 
-    public sendMessage(message: any) {
+    sendMessage(message: any) {
         if (this._view) {
             this._view.webview.postMessage(message);
         } else {
@@ -79,12 +53,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    // ─── Chat ─────────────────────────────────────────────────
+
     private async _handleChat(message: any) {
         try {
             const editor = vscode.window.activeTextEditor;
-            const selectedCode = editor?.selection.isEmpty
-                ? undefined
-                : editor?.document.getText(editor.selection);
+            const selectedCode = editor?.selection.isEmpty ? undefined : editor?.document.getText(editor.selection);
             const contextFile = editor?.document.fileName;
 
             const response = await fetch(`${this._serverUrl}/chat`, {
@@ -98,11 +72,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 }),
             });
 
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(errorText);
-            }
-
+            if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
             this._view?.webview.postMessage({
@@ -116,64 +86,51 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch (error: any) {
             this._view?.webview.postMessage({
                 type: 'error',
-                content: `Error: ${error.message}. Make sure the backend server is running.`,
+                content: `${error.message}. Is the backend running? (cd backend && python server.py)`,
             });
         }
     }
+
+    // ─── Models ────────────────────────────────────────────────
 
     private async _sendModelList() {
         try {
             const response = await fetch(`${this._serverUrl}/models`);
-            const data = await response.json();
-            this._view?.webview.postMessage({
-                type: 'modelList',
-                ...(data as any),
-            });
-        } catch (_error: any) {
+            if (!response.ok) throw new Error(response.statusText);
+            const data = await response.json() as any;
+            this._view?.webview.postMessage({ type: 'modelList', ...data });
+        } catch {
             this._view?.webview.postMessage({
                 type: 'error',
-                content: 'Cannot connect to backend server. Please start it first.',
+                content: 'Cannot connect to backend. Run: cd backend && python server.py',
             });
         }
     }
 
-    private async _loadModel(modelId: string) {
+    private async _loadModel(modelId: string, adapterId?: string) {
         try {
-            this._view?.webview.postMessage({
-                type: 'status',
-                content: `Loading model ${modelId}...`,
-            });
+            this._view?.webview.postMessage({ type: 'status', content: `Loading ${modelId}…` });
 
             const response = await fetch(`${this._serverUrl}/models/select`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model_id: modelId }),
+                body: JSON.stringify({ model_id: modelId, adapter_id: adapterId || null }),
             });
 
-            if (!response.ok) {
-                throw new Error(await response.text());
-            }
+            if (!response.ok) throw new Error(await response.text());
 
-            this._view?.webview.postMessage({
-                type: 'modelLoaded',
-                modelId: modelId,
-            });
-
-            vscode.window.showInformationMessage(`Model ${modelId} loaded successfully!`);
+            this._view?.webview.postMessage({ type: 'modelLoaded', modelId, adapterId });
+            vscode.window.showInformationMessage(
+                `AI Code Partner: ${modelId} loaded${adapterId ? ' + adapter' : ''}!`
+            );
         } catch (error: any) {
-            this._view?.webview.postMessage({
-                type: 'error',
-                content: `Failed to load model: ${error.message}`,
-            });
+            this._view?.webview.postMessage({ type: 'error', content: `Load failed: ${error.message}` });
         }
     }
 
     private async _downloadModel(modelId: string) {
         try {
-            this._view?.webview.postMessage({
-                type: 'status',
-                content: `Downloading model ${modelId}... This may take a while.`,
-            });
+            this._view?.webview.postMessage({ type: 'status', content: `Downloading ${modelId}… this may take a while.` });
 
             const response = await fetch(`${this._serverUrl}/models/download`, {
                 method: 'POST',
@@ -181,141 +138,110 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 body: JSON.stringify({ model_id: modelId }),
             });
 
-            if (!response.ok) {
-                throw new Error(await response.text());
-            }
-
-            this._view?.webview.postMessage({
-                type: 'modelDownloaded',
-                modelId: modelId,
-            });
-
+            if (!response.ok) throw new Error(await response.text());
+            this._view?.webview.postMessage({ type: 'modelDownloaded', modelId });
             vscode.window.showInformationMessage(`Model ${modelId} downloaded!`);
             await this._sendModelList();
         } catch (error: any) {
-            this._view?.webview.postMessage({
-                type: 'error',
-                content: `Download failed: ${error.message}`,
-            });
+            this._view?.webview.postMessage({ type: 'error', content: `Download failed: ${error.message}` });
         }
     }
+
+    private async _sendDownloadProgress(modelId: string) {
+        try {
+            const r = await fetch(`${this._serverUrl}/models/download-progress/${modelId}`);
+            if (!r.ok) return;
+            const data = await r.json() as any;
+            this._view?.webview.postMessage({
+                type: 'downloadProgress',
+                modelId,
+                progress: data.progress || 0,
+                message: data.message || '',
+            });
+        } catch { /* silent */ }
+    }
+
+    // ─── Adapters ──────────────────────────────────────────────
+
+    private async _sendAdapterList() {
+        try {
+            const r = await fetch(`${this._serverUrl}/adapters`);
+            if (!r.ok) return;
+            const data = await r.json() as any;
+            this._view?.webview.postMessage({ type: 'adapterList', adapters: data.adapters });
+        } catch { /* silent */ }
+    }
+
+    // ─── Fine-tune ─────────────────────────────────────────────
+
+    private async _startFineTune(modelId: string, epochs: number, strategies: string[]) {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) {
+            this._view?.webview.postMessage({ type: 'error', content: 'No workspace folder open' });
+            return;
+        }
+
+        try {
+            const response = await fetch(`${this._serverUrl}/fine-tune`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project_path: workspaceFolders[0].uri.fsPath,
+                    model_id: modelId,
+                    epochs,
+                    strategies,
+                }),
+            });
+
+            if (!response.ok) throw new Error(await response.text());
+        } catch (error: any) {
+            this._view?.webview.postMessage({ type: 'error', content: `Fine-tune start failed: ${error.message}` });
+        }
+    }
+
+    private async _sendFtStatus() {
+        try {
+            const r = await fetch(`${this._serverUrl}/fine-tune/status`);
+            if (!r.ok) return;
+            const data = await r.json();
+            this._view?.webview.postMessage({ type: 'ftStatus', status: data });
+        } catch { /* silent */ }
+    }
+
+    // ─── Code ──────────────────────────────────────────────────
 
     private _insertCode(code: string) {
         const editor = vscode.window.activeTextEditor;
-        if (editor) {
-            editor.edit((editBuilder) => {
-                if (editor.selection.isEmpty) {
-                    editBuilder.insert(editor.selection.active, code);
-                } else {
-                    editBuilder.replace(editor.selection, code);
-                }
-            });
-        }
-    }
-
-    private async _applyEdit(message: any) {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) { return; }
-
-        const { code, lineStart, lineEnd } = message;
-        const range = new vscode.Range(
-            new vscode.Position(lineStart - 1, 0),
-            new vscode.Position(lineEnd, 0)
-        );
-
-        await editor.edit((editBuilder) => {
-            editBuilder.replace(range, code + '\n');
+        if (!editor) return;
+        editor.edit(eb => {
+            if (editor.selection.isEmpty) {
+                eb.insert(editor.selection.active, code);
+            } else {
+                eb.replace(editor.selection, code);
+            }
         });
-
-        vscode.window.showInformationMessage('Edit applied!');
     }
+
+    // ─── HTML ──────────────────────────────────────────────────
 
     private _getHtml(webview: vscode.Webview): string {
-        const styleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'media', 'sidebar.css')
-        );
-        const scriptUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this._extensionUri, 'media', 'sidebar.js')
-        );
-        const nonce = getNonce();
+        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'sidebar.css'));
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'sidebar.js'));
+        const nonce = this._nonce();
 
-        return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none';
-                   style-src ${webview.cspSource} 'unsafe-inline';
-                   script-src 'nonce-${nonce}';
-                   connect-src *;">
-    <link rel="stylesheet" href="${styleUri}">
-    <title>AI Code Partner</title>
-</head>
-<body>
-    <div class="header">
-        <div class="header-row">
-            <h3>AI Code Partner</h3>
-        </div>
-        <div class="model-selector">
-            <label class="label-small">Model:</label>
-            <select class="model-select" id="modelSelect">
-                <option value="">Loading models...</option>
-            </select>
-        </div>
-        <div class="header-buttons">
-            <button class="btn-small btn-primary" id="loadModelBtn">Load</button>
-            <button class="btn-small" id="downloadModelBtn">Download</button>
-            <button class="btn-small" id="indexBtn">Index</button>
-            <button class="btn-small" id="finetuneBtn">Fine-tune</button>
-            <button class="btn-small" id="clearBtn">Clear</button>
-        </div>
-    </div>
-
-    <div class="status-bar">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Connecting...</span>
-    </div>
-
-    <div class="chat-container" id="chatContainer">
-        <div class="welcome" id="welcome">
-            <h2>Welcome to AI Code Partner</h2>
-            <p>Your local AI coding assistant with RAG and multi-agent system.</p>
-            <ol class="steps">
-                <li>Start the backend server</li>
-                <li>Select and load a model above</li>
-                <li>Click Index to scan your project</li>
-                <li>Start chatting about your code!</li>
-            </ol>
-        </div>
-    </div>
-
-    <div class="input-container">
-        <div class="input-wrapper">
-            <textarea class="chat-input" id="chatInput"
-                placeholder="Ask about your code... (Enter to send)"
-                rows="1"></textarea>
-            <button class="send-btn" id="sendBtn">Send</button>
-        </div>
-        <div class="quick-actions">
-            <button class="quick-action" data-prompt="Where is authentication implemented?">Find auth</button>
-            <button class="quick-action" data-prompt="Explain the architecture of this project">Architecture</button>
-            <button class="quick-action" data-prompt="Find potential bugs or issues">Find bugs</button>
-            <button class="quick-action" data-prompt="Suggest improvements for code quality">Improve</button>
-        </div>
-    </div>
-
-    <script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>`;
+        // Read template and replace placeholders
+        return require('fs').readFileSync(
+            require('path').join(__dirname, '..', 'media', 'sidebar.html'), 'utf8'
+        )
+            .replace('{{styleUri}}', styleUri.toString())
+            .replace('{{scriptUri}}', scriptUri.toString())
+            // Add nonce to script tag
+            .replace('<script src="{{scriptUri}}"></script>',
+                `<script nonce="${nonce}" src="${scriptUri}"></script>`);
     }
-}
 
-function getNonce(): string {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
+    private _nonce(): string {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     }
-    return text;
 }
