@@ -1,0 +1,165 @@
+{
+  "name": "ai-code-partner",
+  "displayName": "AI Code Partner",
+  "description": "AI-powered code assistant with RAG, multi-agent system, and local LLM inference",
+  "version": "1.0.0",
+  "publisher": "ai-code-partner",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages", "Machine Learning", "Other"],
+  "keywords": ["ai", "code", "assistant", "rag", "llm", "copilot"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ai-code-partner",
+          "title": "AI Code Partner",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "ai-code-partner": [
+        {
+          "type": "webview",
+          "id": "aiCodePartner.sidebar",
+          "name": "AI Code Partner"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aiCodePartner.startServer",
+        "title": "AI Code Partner: Start Backend Server"
+      },
+      {
+        "command": "aiCodePartner.indexProject",
+        "title": "AI Code Partner: Index Current Project"
+      },
+      {
+        "command": "aiCodePartner.chat",
+        "title": "AI Code Partner: Open Chat"
+      },
+      {
+        "command": "aiCodePartner.generateCode",
+        "title": "AI Code Partner: Generate Code"
+      },
+      {
+        "command": "aiCodePartner.refactorCode",
+        "title": "AI Code Partner: Refactor Selected Code"
+      },
+      {
+        "command": "aiCodePartner.generateTests",
+        "title": "AI Code Partner: Generate Tests for Selected Code"
+      },
+      {
+        "command": "aiCodePartner.explainCode",
+        "title": "AI Code Partner: Explain Selected Code"
+      },
+      {
+        "command": "aiCodePartner.inlineEdit",
+        "title": "AI Code Partner: Inline Edit"
+      },
+      {
+        "command": "aiCodePartner.selectModel",
+        "title": "AI Code Partner: Select Model"
+      },
+      {
+        "command": "aiCodePartner.downloadModel",
+        "title": "AI Code Partner: Download Model"
+      },
+      {
+        "command": "aiCodePartner.fineTune",
+        "title": "AI Code Partner: Fine-tune on Project"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "aiCodePartner.explainCode",
+          "when": "editorHasSelection",
+          "group": "ai-code-partner@1"
+        },
+        {
+          "command": "aiCodePartner.refactorCode",
+          "when": "editorHasSelection",
+          "group": "ai-code-partner@2"
+        },
+        {
+          "command": "aiCodePartner.generateTests",
+          "when": "editorHasSelection",
+          "group": "ai-code-partner@3"
+        },
+        {
+          "command": "aiCodePartner.inlineEdit",
+          "when": "editorHasSelection",
+          "group": "ai-code-partner@4"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "aiCodePartner.chat",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      },
+      {
+        "command": "aiCodePartner.inlineEdit",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "aiCodePartner.generateCode",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      }
+    ],
+    "configuration": {
+      "title": "AI Code Partner",
+      "properties": {
+        "aiCodePartner.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "Backend server URL"
+        },
+        "aiCodePartner.autoIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically index project on startup"
+        },
+        "aiCodePartner.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python interpreter"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.2",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0",
+    "ws": "^8.16.0"
+  }
+}

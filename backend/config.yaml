@@ -1,0 +1,135 @@
+server:
+  host: "127.0.0.1"
+  port: 8765
+  ws_port: 8766
+
+models:
+  available:
+    - id: "deepseek-coder-1.3b"
+      name: "DeepSeek Coder 1.3B (Lightweight)"
+      repo: "deepseek-ai/deepseek-coder-1.3b-instruct"
+      type: "causal"
+      quantization: "4bit"
+      ram_required: "4GB"
+      description: "Fast, lightweight code model for basic tasks"
+
+    - id: "deepseek-coder-6.7b"
+      name: "DeepSeek Coder 6.7B (Balanced)"
+      repo: "deepseek-ai/deepseek-coder-6.7b-instruct"
+      type: "causal"
+      quantization: "4bit"
+      ram_required: "8GB"
+      description: "Balanced code model for most tasks"
+
+    - id: "codellama-7b"
+      name: "CodeLlama 7B Instruct"
+      repo: "codellama/CodeLlama-7b-Instruct-hf"
+      type: "causal"
+      quantization: "4bit"
+      ram_required: "8GB"
+      description: "Meta's code-specialized Llama model"
+
+    - id: "starcoder2-3b"
+      name: "StarCoder2 3B"
+      repo: "bigcode/starcoder2-3b"
+      type: "causal"
+      quantization: "4bit"
+      ram_required: "4GB"
+      description: "BigCode's efficient code model"
+
+    - id: "qwen2.5-coder-1.5b"
+      name: "Qwen2.5 Coder 1.5B (Recommended)"
+      repo: "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+      type: "causal"
+      quantization: "4bit"
+      ram_required: "3GB"
+      description: "Excellent small code model by Alibaba"
+
+    - id: "qwen2.5-coder-7b"
+      name: "Qwen2.5 Coder 7B"
+      repo: "Qwen/Qwen2.5-Coder-7B-Instruct"
+      type: "causal"
+      quantization: "4bit"
+      ram_required: "8GB"
+      description: "Powerful code model by Alibaba"
+
+  default: "qwen2.5-coder-1.5b"
+
+  embeddings:
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+    dimension: 384
+
+rag:
+  chunk_size: 512
+  chunk_overlap: 50
+  top_k: 5
+  supported_extensions:
+    - ".py"
+    - ".js"
+    - ".ts"
+    - ".tsx"
+    - ".jsx"
+    - ".java"
+    - ".cpp"
+    - ".c"
+    - ".h"
+    - ".hpp"
+    - ".cs"
+    - ".go"
+    - ".rs"
+    - ".rb"
+    - ".php"
+    - ".swift"
+    - ".kt"
+    - ".scala"
+    - ".vue"
+    - ".svelte"
+    - ".html"
+    - ".css"
+    - ".scss"
+    - ".sql"
+    - ".yaml"
+    - ".yml"
+    - ".json"
+    - ".toml"
+    - ".md"
+    - ".txt"
+    - ".sh"
+    - ".bat"
+    - ".dockerfile"
+    - ".xml"
+
+  ignore_patterns:
+    - "node_modules"
+    - ".git"
+    - "__pycache__"
+    - ".venv"
+    - "venv"
+    - "dist"
+    - "build"
+    - ".next"
+    - "target"
+    - "*.min.js"
+    - "*.min.css"
+    - "package-lock.json"
+    - "yarn.lock"
+    - "*.pyc"
+
+fine_tuning:
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  learning_rate: 2.0e-4
+  num_epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  max_seq_length: 1024
+  warmup_ratio: 0.03
+
+generation:
+  max_new_tokens: 2048
+  temperature: 0.2
+  top_p: 0.95
+  top_k: 50
+  repetition_penalty: 1.1
+  do_sample: true

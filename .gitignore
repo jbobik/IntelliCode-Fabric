@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.egg
+
+# Node
+node_modules/
+dist/
+*.vsix
+
+# Models (large files)
+models/*/
+!models/.gitkeep
+
+# Data
+data/chroma_db/
+data/*.jsonl
+!data/.gitkeep
+
+# IDE
+.vscode/settings.json
+*.sw[po]
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Env
+.env
+.env.local

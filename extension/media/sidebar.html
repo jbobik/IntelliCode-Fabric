@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Code Partner</title>
+    <link rel="stylesheet" href="{{styleUri}}">
+</head>
+<body>
+    <!-- ═══════════ HEADER ═══════════ -->
+    <div class="header">
+        <div class="header-row">
+            <h3>🤖 AI Code Partner</h3>
+            <button class="btn-icon" id="settingsBtn" title="Settings">⚙️</button>
+        </div>
+
+        <!-- Model Selector -->
+        <div class="model-selector">
+            <label class="label-small">Model:</label>
+            <select class="model-select" id="modelSelect">
+                <option value="">Loading models...</option>
+            </select>
+        </div>
+
+        <div class="header-buttons">
+            <button class="btn-small btn-primary" id="loadModelBtn" title="Load selected model into memory">
+                ▶ Load
+            </button>
+            <button class="btn-small" id="downloadModelBtn" title="Download model from HuggingFace">
+                ⬇ Download
+            </button>
+            <button class="btn-small" id="indexBtn" title="Index project files for RAG">
+                📁 Index
+            </button>
+            <button class="btn-small" id="clearBtn" title="Clear chat history">
+                🗑 Clear
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══════════ STATUS BAR ═══════════ -->
+    <div class="status-bar">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting to backend...</span>
+    </div>
+
+    <!-- ═══════════ CHAT AREA ═══════════ -->
+    <div class="chat-container" id="chatContainer">
+        <!-- Welcome Screen -->
+        <div class="welcome" id="welcome">
+            <div class="welcome-icon">🤖</div>
+            <h2>Welcome to AI Code Partner</h2>
+            <p>Your local AI coding assistant with RAG, multi-agent system, and fine-tuning.</p>
+
+            <div class="setup-steps">
+                <h4>Getting Started:</h4>
+                <ol>
+                    <li>
+                        <span class="step-icon">🖥️</span>
+                        Start the backend server
+                        <code>cd backend && python server.py</code>
+                    </li>
+                    <li>
+                        <span class="step-icon">📦</span>
+                        Select & load a model from the dropdown above
+                    </li>
+                    <li>
+                        <span class="step-icon">📁</span>
+                        Click <strong>Index</strong> to scan your project
+                    </li>
+                    <li>
+                        <span class="step-icon">💬</span>
+                        Start asking questions about your code!
+                    </li>
+                </ol>
+            </div>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <span>🔍</span>
+                    <strong>RAG Search</strong>
+                    <small>Finds relevant code across your entire project</small>
+                </div>
+                <div class="feature-card">
+                    <span>🤝</span>
+                    <strong>Multi-Agent</strong>
+                    <small>Analyst, Coder, Refactor & Tester agents</small>
+                </div>
+                <div class="feature-card">
+                    <span>🏠</span>
+                    <strong>100% Local</strong>
+                    <small>Your code never leaves your machine</small>
+                </div>
+                <div class="feature-card">
+                    <span>🎯</span>
+                    <strong>Fine-Tuning</strong>
+                    <small>Train on your project's coding style</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ INPUT AREA ═══════════ -->
+    <div class="input-container">
+        <div class="input-wrapper">
+            <textarea
+                class="chat-input"
+                id="chatInput"
+                placeholder="Ask about your code... (Enter to send, Shift+Enter for new line)"
+                rows="1"
+            ></textarea>
+            <button class="send-btn" id="sendBtn" title="Send message (Enter)">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M1 1.5L15 8L1 14.5V9.5L10 8L1 6.5V1.5Z"/>
+                </svg>
+            </button>
+        </div>
+        <div class="quick-actions" id="quickActions">
+            <button class="quick-action" data-prompt="Where is authentication implemented in this project?">
+                🔐 Find auth
+            </button>
+            <button class="quick-action" data-prompt="Explain the overall architecture and main components of this project">
+                📐 Architecture
+            </button>
+            <button class="quick-action" data-prompt="Find potential bugs, security issues, or code smells in this project">
+                🐛 Find bugs
+            </button>
+            <button class="quick-action" data-prompt="Suggest improvements for code quality and maintainability">
+                ✨ Improve
+            </button>
+            <button class="quick-action" data-prompt="List all API endpoints/routes in this project">
+                🌐 API routes
+            </button>
+            <button class="quick-action" data-prompt="Show the database models/schema used in this project">
+                🗄️ DB schema
+            </button>
+        </div>
+    </div>
+
+    <script src="{{scriptUri}}"></script>
+</body>
+</html>
