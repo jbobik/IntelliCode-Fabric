@@ -1,291 +1,155 @@
 <div align="center">
 
-# ⬡ IntelliCode Fabric
+# 🌌 IntelliCode Fabric
 
-**Fully-local AI code assistant for VS Code**
+**Ультимативный локальный AI-партнер по разработке для VS Code**
 
-RAG · Multi-Agent · Local LLM · Fine-Tuning · Zero Data Leakage
+[![VS Code](https://img.shields.io/badge/VS%20Code-Extension-blue?logo=visual-studio-code)](https://code.visualstudio.com/)
+[![Python](https://img.shields.io/badge/Python-3.11+-yellow?logo=python)](https://python.org)
+[![PyTorch](https://img.shields.io/badge/PyTorch-Optimized-ee4c2c?logo=pytorch)](https://pytorch.org/)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-Integrated-orange?logo=huggingface)](https://huggingface.co/)
+[![Privacy](https://img.shields.io/badge/Privacy-100%25_Local-success)](#)
 
-[![VS Code](https://img.shields.io/badge/VS%20Code-1.85+-007ACC?logo=visual-studio-code&logoColor=white)](https://code.visualstudio.com/)
-[![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Local](https://img.shields.io/badge/Inference-100%25_Local-brightgreen)](#)
-[![Fine-tune](https://img.shields.io/badge/Fine--tune-QLoRA-blueviolet)](#fine-tuning)
-
-<br>
-
-<img src="https://img.shields.io/badge/No_API_Keys-✓-success?style=for-the-badge" alt="No API Keys">
-<img src="https://img.shields.io/badge/No_Subscriptions-✓-success?style=for-the-badge" alt="No Subscriptions">
-<img src="https://img.shields.io/badge/Your_Code_Stays_Local-✓-success?style=for-the-badge" alt="Local">
+[Особенности](#-ключевые-особенности) • [Архитектура](#-архитектура) • [Быстрый старт](#-быстрый-старт) • [Дообучение](#-дообучение-qlora-fine-tuning) • [Кастомные модели](#-кастомные-модели-huggingface)
 
 </div>
 
----
+## 📖 О проекте
 
-## What is IntelliCode Fabric?
+**IntelliCode Fabric** — это продвинутый AI-ассистент разработчика, ориентированный на безопасность данных и встроенный прямо в VS Code. В отличие от облачных решений (таких как GitHub Copilot или Cursor), IntelliCode Fabric работает **на 100% локально** на вашем компьютере.
 
-IntelliCode Fabric is a VS Code extension that acts as a **full AI development partner** — not just autocomplete. It indexes your entire codebase via RAG, routes requests to specialized agents, runs models locally on your hardware, and can even be fine-tuned on your project's coding style.
+Он не просто дополняет код. Он понимает всё ваше рабочее пространство благодаря технологии **RAG**, делегирует сложные задачи **Мультиагентной системе** и даже может **дообучаться (Fine-Tuning)** под уникальный стиль написания кода в вашем проекте с помощью QLoRA.
 
-**Key difference from Cursor / Copilot / Cody:** your code **never leaves your machine**. No API calls. No cloud. No subscriptions. Everything runs locally.
-
----
-
-## ✨ Feature Overview
-
-| Feature | Description |
-|---------|-------------|
-| **📚 RAG** | Indexes all project files into ChromaDB vector store. Every question gets answered with full project context. |
-| **🤝 Multi-Agent System** | 4 specialized agents: Analyst (search/explain), Coder (generate), Refactor (patterns/SOLID), Tester (unit tests). Auto-routing by intent. |
-| **🏠 Local Inference** | Models run on your machine via HuggingFace Transformers. No API keys needed. |
-| **⚡ 4-bit Quantization** | NF4 quantization via bitsandbytes — run 7B models on 8GB VRAM or even CPU. |
-| **🎯 Fine-Tuning** | QLoRA fine-tuning on your codebase. Model learns your naming conventions, architecture patterns, internal APIs. |
-| **✏️ Inline Editing** | AI edits code directly in editor with diff preview — accept or reject. |
-| **📥 Model Hub** | Download/switch between 12+ models from the UI. Load any HuggingFace model or local checkpoint. |
-| **🔌 Custom Models** | Enter any HuggingFace repo ID or local path to load any compatible model. |
+Никаких API-ключей. Никаких подписок. Никакой телеметрии. **Ваш код никогда не покидает ваш компьютер.**
 
 ---
 
-## 🏗️ Architecture
+## ✨ Ключевые особенности
 
-```text
-┌─────────────────────────────────────────┐
-│  VS Code Extension (TypeScript)         │
-│  ┌─────────────────────────────────┐    │
-│  │ • Sidebar Chat UI               │    │
-│  │ • Inline Editor                 │    │
-│  │ • Command Palette               │    │
-│  │ • Model Manager                 │    │
-│  └────────┬────────────────────────┘    │
-│           │                             │
-│  ┌────────▼────────┐                    │
-│  │ Agent Orchestrator │                 │
-│  │ ┌────┬────┬────┬────┐               │
-│  │ │Anal│Coder│Refa│Test│               │
-│  │ └────┴────┴────┴────┘               │
-│  └────────┬────────┘                    │
-└───────────┼─────────────────────────────┘
-            │ HTTP / WebSocket
-┌───────────▼─────────────────────────────┐
-│  Python Backend (FastAPI)               │
-│  ┌─────────────────────────────────┐    │
-│  │ Agent Orchestrator (Python)     │    │
-│  │ ┌────┬────┬────┬────┐           │    │
-│  │ │Anal│Coder│Refa│Test│           │    │
-│  │ └────┴────┴────┴────┘           │    │
-│  └────────┬────────────────────────┘    │
-│           │                             │
-│  ┌────────▼────────┬────────┐           │
-│  │ RAG Engine      │ LLM    │           │
-│  │ • Chunker       │ Inference        │
-│  │ • Embedder      │ • 4-bit quant    │
-│  │ • Retriever     │ • Streaming      │
-│  └────────┬────────┴────────┘           │
-│           │                             │
-│  ┌────────▼────────┐                    │
-│  │ ChromaDB        │ HuggingFace        │
-│  │ (Vectors)       │ (Models)           │
-│  └─────────────────┘                    │
-└─────────────────────────────────────────┘
+*   **📚 RAG по всему проекту:** Локально индексирует всю кодовую базу с помощью `ChromaDB`. Спросите: *"Где реализован middleware авторизации?"* — и получите точный ответ со ссылками на файлы.
+*   **🤖 Мультиагентная оркестрация:** Ваши запросы автоматически маршрутизируются к специализированным AI-агентам:
+    *   **🔍 Аналитик (Analyst):** Объясняет архитектуру и потоки данных.
+    *   **💻 Кодер (Coder):** Пишет новые функции, учитывая контекст проекта.
+    *   **🔄 Рефактор (Refactor):** Применяет паттерны проектирования (SOLID, Strategy и др.) к существующему коду.
+    *   **🧪 Тестировщик (Tester):** Генерирует комплексные юнит-тесты на основе вашего фреймворка.
+*   **🎯 Дообучение (Fine-Tuning) прямо в IDE:** Обучите AI специфичным правилам и стилю вашей команды через UI в VS Code. Создает легкий LoRA-адаптер (~50 МБ) без дублирования базовой модели.
+*   **📥 Загрузка ЛЮБЫХ моделей с HuggingFace:** Вставьте ссылку на любой репозиторий модели с HuggingFace, и система автоматически скачает, квантует и загрузит её.
+*   **⚡ Оптимизация под слабое железо:** Использует 4-битное (NF4) квантование через `bitsandbytes`. Запускайте мощные модели на 1.5B–7B параметров на обычных ноутбуках (требуется всего 3–8 ГБ оперативной/видеопамяти).
+*   **✏️ Inline-редактирование кода:** Выделите код в редакторе, скажите AI, что нужно изменить, и примените готовый Diff в один клик.
+
+---
+
+## 🏗 Архитектура
+
+IntelliCode Fabric разделен на легкое TypeScript-расширение для VS Code и мощный Python-бэкенд.
+
+```mermaid
+graph TD;
+    A[VS Code Extension UI] <-->|HTTP / REST| B(FastAPI Backend);
+    B --> C{Agent Orchestrator};
+    C --> D[Analyst Agent];
+    C --> E[Coder Agent];
+    C --> F[Refactor Agent];
+    C --> G[Tester Agent];
+    
+    B <--> H[(ChromaDB Vector Store)];
+    H -.->|RAG Engine| I[AST Chunking & Embeddings];
+    
+    B <--> J[LLM Inference Engine];
+    J -.-> K[4-bit Quantized Models];
+    J -.-> L[LoRA Adapters];
 ```
-
-## 🔹 Как работает RAG
-```text
-Вопрос: "Где реализована аутентификация?"
-│
-▼
-┌──────────────────┐
-│ 1. Embed вопрос  │ sentence-transformers/all-MiniLM-L6-v2
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ 2. Поиск в       │ ChromaDB: cosine similarity, top-5 chunks
-│    ChromaDB      │
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ 3. Формируем     │ System prompt + найденные фрагменты кода
-│    промпт        │ + вопрос пользователя
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ 4. LLM генерирует│ Qwen2.5-Coder / DeepSeek / CodeLlama
-│    ответ         │ с конкретными ссылками на файлы
-└──────────────────┘
-```
-
-## 🔹 Как работает мультиагентная система
-```text
-Запрос пользователя
-│
-▼
-┌──────────────────────────┐
-│ Intent Classification    │
-│ • Rule-based (быстро)    │
-│ • LLM (сложные случаи)   │
-│                          │
-│ "рефактор" → refactor    │
-│ "тесты"    → test        │
-│ "где?"     → analyze     │
-│ "создай"   → generate    │
-└──────────┬───────────────┘
-           │
-     ┌─────┴─────┐
-     ▼           ▼
-┌────────┐ ┌────────┐
-│Analyst │→│ Coder  │  Pipeline: Analyst анализирует → Coder пишет
-└────────┘ └────────┘
-           │
-           ▼
-     ┌──────────┐
-     │ Response │  Код + объяснение + ссылки на файлы
-     └──────────┘
-```
-
----
-
-## 📦 Часть 4/10: Быстрый старт
 
 ---
 
 ## 🚀 Быстрый старт
 
-### 🔹 Требования
+### Требования
+*   Node.js 18+
+*   Python 3.11+
+*   *(Опционально, но рекомендуется)* Видеокарта NVIDIA с поддержкой CUDA
 
-| Компонент | Минимум | Рекомендуется |
-|-----------|---------|---------------|
-| **Python** | 3.9 | 3.10–3.11 |
-| **Node.js** | 18 | 20+ |
-| **VS Code** | 1.85 | Последняя версия |
-| **RAM** | 4 GB | 16 GB |
-| **GPU** | Не обязательно | NVIDIA с 8GB+ VRAM |
-| **Диск** | 5 GB | 20 GB (для моделей) |
+### 1. Установка и запуск бэкенда
 
-### 🔹 Установка
+Склонируйте репозиторий и запустите скрипт настройки для создания виртуального окружения и установки зависимостей:
 
-```bash
-# 1. Клонируйте репозиторий
-git clone https://github.com/jbobik/IntelliCode-Fabric.git
-cd IntelliCode-Fabric
-
-# 2. Запустите установку
-# Linux / macOS:
-chmod +x scripts/setup.sh
-./scripts/setup.sh
-
-# Windows:
+**Windows:**
+```bat
 scripts\setup.bat
 ```
-```
-📦 Скрипт установки автоматически:
-Создаёт Python virtual environment
-Устанавливает все зависимости (PyTorch, Transformers, ChromaDB, etc.)
-Устанавливает npm-зависимости расширения
-Компилирует TypeScript
-Скачивает embedding-модель
+
+**Linux / macOS:**
+```bash
+chmod +x scripts/setup.sh
+./scripts/setup.sh
 ```
 
-# Терминал 1: Запуск бэкенда
+Запустите сервер FastAPI:
 ```bash
-# Linux/macOS:
-source .venv/bin/activate
-# Windows:
-.venv\Scripts\activate
-```
-
-```bash
+source .venv/bin/activate  # (или .venv\Scripts\activate на Windows)
 cd backend
 python server.py
-# ✅ Server running at http://127.0.0.1:8765
-```
-# Терминал 2: Открыть VS Code
-```bash
-cd ..
-code .
-# Нажмите F5 для запуска расширения в режиме отладки
 ```
 
-# 🔹 Первые шаги
-1. Откройте боковую панель — кликните на иконку 🤖 в Activity Bar
-2. Выберите модель из выпадающего списка:
-3. 🐌 Слабое железо → Qwen2.5 Coder 1.5B (~3GB RAM)
-4. ⚡ Среднее → DeepSeek Coder 6.7B (~8GB RAM)
-5. Нажмите "⬇ Download" для скачивания модели (первый раз)
-6. Нажмите "▶ Load" для загрузки модели в память
-7. Нажмите "📁 Index" для индексации вашего проекта
-8. Начните общение! Попробуйте: "Где в проекте реализована аутентификация?"
----
-
-## 📦 Доступные модели
-
-| Модель | Параметры | RAM (4-bit) | Скорость | Качество | Лучше для |
-|--------|-----------|-------------|----------|----------|-----------|
-| **Qwen2.5 Coder 1.5B** ⭐ | 1.5B | ~3 GB | ⚡⚡⚡ | ★★★ | Слабое железо, быстрые ответы |
-| DeepSeek Coder 1.3B | 1.3B | ~4 GB | ⚡⚡⚡ | ★★★ | Лёгкие задачи |
-| StarCoder2 3B | 3B | ~4 GB | ⚡⚡ | ★★★★ | Баланс скорость/качество |
-| CodeLlama 7B | 7B | ~8 GB | ⚡ | ★★★★ | Сложные задачи (Meta) |
-| DeepSeek Coder 6.7B | 6.7B | ~8 GB | ⚡ | ★★★★★ | Лучшее качество |
-| Qwen2.5 Coder 7B | 7B | ~8 GB | ⚡ | ★★★★★ | Лучшее общее качество |
-
-### 🔹 Скачивание через CLI
-
-```bash
-# Посмотреть список доступных моделей
-python scripts/download_model.py --list
-
-# Скачать конкретную модель
-python scripts/download_model.py --model qwen2.5-coder-1.5b
-python scripts/download_model.py --model deepseek-coder-6.7b
-```
----
-# 🔹 Скачивание через UI
-Нажмите "⬇ Download" в боковой панели расширения — модель скачается с HuggingFace Hub автоматически.
+### 2. Запуск расширения VS Code
+1. Откройте корневую папку проекта в VS Code.
+2. Нажмите `F5`, чтобы запустить расширение в режиме отладки (или скомпилируйте через `npm run compile`).
+3. Откройте панель **IntelliCode Fabric** в боковом меню.
+4. Выберите модель (например, `Qwen2.5 Coder 1.5B`) и нажмите **Load**.
+5. Нажмите **📁 Index**, чтобы просканировать ваш проект.
+6. Начинайте общаться с AI!
 
 ---
 
-## 📦 Часть 6/10: Подробное описание функций (часть 1)
+## 🎯 Дообучение (QLoRA Fine-Tuning)
 
-## 📖 Подробное описание функций
+Устали от универсального кода, который генерирует AI? Научите модель вашему уникальному стилю.
 
-### 1️⃣ RAG (Retrieval-Augmented Generation)
+1. Откройте ваш проект в VS Code.
+2. В боковой панели IntelliCode Fabric нажмите кнопку **🎯 Fine-tune**.
+3. Выберите базовую модель, укажите количество эпох (до 100) и выберите стратегии извлечения данных (например, *Докстринг → Реализация*, *Комментарий → Код*).
+4. Нажмите **Start Fine-tuning**.
+5. После завершения загрузите свежесозданный **Адаптер** из выпадающего меню моделей. Теперь ваш AI разговаривает на диалекте вашего проекта!
 
-При нажатии **"📁 Index"** плагин:
+---
 
-1. 🔍 Рекурсивно сканирует все файлы проекта (30+ расширений)
-2. 🚫 Игнорирует `node_modules`, `.git`, `__pycache__`, `dist`, `build`
-3. ✂️ Разбивает файлы на семантические чанки:
-   - **Структурный чанкинг**: по функциям, классам, методам (regex по языку)
-   - **Линейный чанкинг**: fallback на разбивку по строкам с overlap
-4. 🧮 Генерирует эмбеддинги через `sentence-transformers/all-MiniLM-L6-v2`
-5. 💾 Сохраняет в ChromaDB с метаданными (файл, строки, тип чанка)
+## 🌐 Кастомные модели HuggingFace
 
-**При каждом запросе:**
+Вы не ограничены моделями по умолчанию.
+1. Зайдите на [HuggingFace](https://huggingface.co/models).
+2. Найдите любую code-модель (например, `microsoft/Phi-3-mini-4k-instruct`).
+3. Вставьте имя репозитория в поле ввода кастомной модели в боковой панели.
+4. Нажмите **Add**. Система скачает модель, применит 4-битное квантование и добавит её в вашу локальную библиотеку.
 
-```text
-Вопрос → эмбеддинг → поиск top-5 чанков (cosine similarity) → 
-контекст в промпт → генерация ответа LLM
-```
+---
 
-### 2️⃣ Мультиагентная система
+## ⚖️ Сравнение аналогов
 
-**Автоматическая классификация** — система определяет намерение по ключевым словам:
+| Характеристика | IntelliCode Fabric | GitHub Copilot | Cursor |
+| :--- | :---: | :---: | :---: |
+| **100% Локально (Оффлайн)** | ✅ Да | ❌ Нет | ❌ Нет |
+| **Конфиденциальность данных**| 💯 Абсолютная | ⚠️ Отправка в облако | ⚠️ Отправка в облако |
+| **RAG по всему проекту** | ✅ Глубокий AST чанкинг| ⚠️ Ограниченно | ✅ Да |
+| **Дообучение прямо в IDE** | ✅ Да (QLoRA) | ❌ Только Enterprise | ❌ Нет |
+| **Свои (кастомные) модели** | ✅ Любая модель с HF | ❌ Заблокировано | ❌ Только облачные |
+| **Стоимость** | **Бесплатно (Open Source)** | $10 / месяц | $20 / месяц |
 
-| Запрос | Агент |
-|--------|-------|
-| *"Where is auth?"* | 🕵️ Analyst Agent |
-| *"Создай endpoint"* | 💻 Coder Agent |
-| *"Рефактор с Strategy"* | 🔄 Refactor Agent |
-| *"Напиши тесты"* | 🧪 Tester Agent |
+---
 
-**Pipeline для сложных запросов:**
-- Запрос генерации кода: `Analyst` анализирует → `Coder` генерирует
-- Запрос рефакторинга: `Analyst` анализирует контекст → `Refactor` применяет паттерн
-- Запрос тестов: `Analyst` определяет что тестировать → `Tester` генерирует тесты
+## 🛠 Стек технологий
 
-### 3️⃣ Inline-редактирование
+*   **Frontend:** TypeScript, VS Code Extension API, Vanilla JS/CSS (Dark Industrial Theme).
+*   **Backend:** Python, FastAPI, Uvicorn.
+*   **AI / ML:** PyTorch, HuggingFace `transformers`, `trl` (SFTTrainer), `peft` (LoRA), `bitsandbytes` (NF4 Quantization).
+*   **Векторная БД:** `ChromaDB` с использованием `sentence-transformers`.
 
-1. Выделите код в редакторе
-2. `Ctrl+Shift+E` или правый клик → **"AI Code Partner: Inline Edit"**
-3. Введите инструкцию: *"Добавь обработку ошибок"*
-4. Откроется **diff-view**: `Original` ↔ `Modified`
-5. Нажмите **"Apply Changes"** или **"Cancel"**
+---
 
+## 📄 Лицензия
+
+Распространяется под лицензией Apache. Подробности см. в файле `LICENSE`.
+
+---
+<div align="center">
+<i>Создано для инженеров, которым важна мощность, автономность и абсолютная приватность кода.</i>
+</div>
