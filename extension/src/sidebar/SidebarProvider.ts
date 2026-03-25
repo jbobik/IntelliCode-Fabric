@@ -59,6 +59,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'applyEdit':
                     await this._applyEdit(message);
                     break;
+                case 'fineTune':
+                    vscode.commands.executeCommand('aiCodePartner.fineTune');
+                    break;
             }
         });
 
@@ -264,6 +267,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             <button class="btn-small btn-primary" id="loadModelBtn">Load</button>
             <button class="btn-small" id="downloadModelBtn">Download</button>
             <button class="btn-small" id="indexBtn">Index</button>
+            <button class="btn-small" id="finetuneBtn">Fine-tune</button>
             <button class="btn-small" id="clearBtn">Clear</button>
         </div>
     </div>

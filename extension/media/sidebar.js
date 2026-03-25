@@ -13,6 +13,8 @@
     var statusDot = document.getElementById('statusDot');
     var statusText = document.getElementById('statusText');
     var welcome = document.getElementById('welcome');
+    var finetuneBtn = document.getElementById('finetuneBtn');
+
 
     var conversationHistory = [];
     var isLoading = false;
@@ -85,6 +87,11 @@
         }
         if (welcome) { welcome.style.display = ''; }
         saveState();
+    });
+
+    finetuneBtn.addEventListener('click', function () {
+        addSystemMessage('Starting fine-tuning on project codebase...');
+        vscode.postMessage({ type: 'fineTune' });
     });
 
     var quickBtns = document.querySelectorAll('.quick-action');
