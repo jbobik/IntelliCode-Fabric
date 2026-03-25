@@ -105,6 +105,10 @@ class LLMInference:
         loaded = False
 
         # 4-bit (CUDA + bitsandbytes)
+        # Handle empty/none quantization
+        if not quantization or quantization == "none":
+            quantization = ""
+
         if quantization == "4bit" and self.device == "cuda":
             try:
                 from transformers import BitsAndBytesConfig

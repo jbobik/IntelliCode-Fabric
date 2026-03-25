@@ -44,7 +44,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'getDownloadProgress':
                     await this._sendDownloadProgress(msg.modelId);
                     break;
-                case 'indexProject': vscode.commands.executeCommand('aiCodePartner.indexProject'); break;
+                case 'indexProject': vscode.commands.executeCommand('intelliCodeFabric.indexProject'); break;
                 case 'fineTune': await this._startFineTune(msg.modelId, msg.epochs, msg.strategies); break;
                 case 'getFtStatus':
                     await this._sendFtStatus();

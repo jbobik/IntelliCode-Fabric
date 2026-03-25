@@ -1,9 +1,9 @@
 {
-  "name": "ai-code-partner",
-  "displayName": "AI Code Partner",
-  "description": "AI-powered code assistant with RAG, multi-agent system, and local LLM inference",
+  "name": "intellicode-fabric",
+  "displayName": "IntelliCode Fabric",
+  "description": "AI-powered code assistant with RAG, multi-agent system, local LLM inference, and fine-tuning — fully local, fully private",
   "version": "1.0.0",
-  "publisher": "ai-code-partner",
+  "publisher": "intellicode-fabric",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -17,123 +17,90 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "ai-code-partner",
-          "title": "AI Code Partner",
+          "id": "intellicode-fabric",
+          "title": "IntelliCode Fabric",
           "icon": "$(hubot)"
         }
       ]
     },
     "views": {
-      "ai-code-partner": [
+      "intellicode-fabric": [
         {
           "type": "webview",
-          "id": "aiCodePartner.sidebar",
-          "name": "AI Code Partner"
+          "id": "intelliCodeFabric.sidebar",
+          "name": "IntelliCode Fabric"
         }
       ]
     },
     "commands": [
-      {
-        "command": "aiCodePartner.startServer",
-        "title": "AI Code Partner: Start Backend Server"
-      },
-      {
-        "command": "aiCodePartner.indexProject",
-        "title": "AI Code Partner: Index Current Project"
-      },
-      {
-        "command": "aiCodePartner.chat",
-        "title": "AI Code Partner: Open Chat"
-      },
-      {
-        "command": "aiCodePartner.generateCode",
-        "title": "AI Code Partner: Generate Code"
-      },
-      {
-        "command": "aiCodePartner.refactorCode",
-        "title": "AI Code Partner: Refactor Selected Code"
-      },
-      {
-        "command": "aiCodePartner.generateTests",
-        "title": "AI Code Partner: Generate Tests for Selected Code"
-      },
-      {
-        "command": "aiCodePartner.explainCode",
-        "title": "AI Code Partner: Explain Selected Code"
-      },
-      {
-        "command": "aiCodePartner.inlineEdit",
-        "title": "AI Code Partner: Inline Edit"
-      },
-      {
-        "command": "aiCodePartner.selectModel",
-        "title": "AI Code Partner: Select Model"
-      },
-      {
-        "command": "aiCodePartner.downloadModel",
-        "title": "AI Code Partner: Download Model"
-      },
-      {
-        "command": "aiCodePartner.fineTune",
-        "title": "AI Code Partner: Fine-tune on Project"
-      }
+      { "command": "intelliCodeFabric.startServer", "title": "IntelliCode Fabric: Start Backend Server" },
+      { "command": "intelliCodeFabric.indexProject", "title": "IntelliCode Fabric: Index Current Project" },
+      { "command": "intelliCodeFabric.chat", "title": "IntelliCode Fabric: Open Chat" },
+      { "command": "intelliCodeFabric.generateCode", "title": "IntelliCode Fabric: Generate Code" },
+      { "command": "intelliCodeFabric.refactorCode", "title": "IntelliCode Fabric: Refactor Selected Code" },
+      { "command": "intelliCodeFabric.generateTests", "title": "IntelliCode Fabric: Generate Tests" },
+      { "command": "intelliCodeFabric.explainCode", "title": "IntelliCode Fabric: Explain Selected Code" },
+      { "command": "intelliCodeFabric.inlineEdit", "title": "IntelliCode Fabric: Inline Edit" },
+      { "command": "intelliCodeFabric.selectModel", "title": "IntelliCode Fabric: Select Model" },
+      { "command": "intelliCodeFabric.downloadModel", "title": "IntelliCode Fabric: Download Model" },
+      { "command": "intelliCodeFabric.fineTune", "title": "IntelliCode Fabric: Fine-tune on Project" }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "aiCodePartner.explainCode",
+          "command": "intelliCodeFabric.explainCode",
           "when": "editorHasSelection",
-          "group": "ai-code-partner@1"
+          "group": "intellicode-fabric@1"
         },
         {
-          "command": "aiCodePartner.refactorCode",
+          "command": "intelliCodeFabric.refactorCode",
           "when": "editorHasSelection",
-          "group": "ai-code-partner@2"
+          "group": "intellicode-fabric@2"
         },
         {
-          "command": "aiCodePartner.generateTests",
+          "command": "intelliCodeFabric.generateTests",
           "when": "editorHasSelection",
-          "group": "ai-code-partner@3"
+          "group": "intellicode-fabric@3"
         },
         {
-          "command": "aiCodePartner.inlineEdit",
+          "command": "intelliCodeFabric.inlineEdit",
           "when": "editorHasSelection",
-          "group": "ai-code-partner@4"
+          "group": "intellicode-fabric@4"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "aiCodePartner.chat",
+        "command": "intelliCodeFabric.chat",
         "key": "ctrl+shift+a",
         "mac": "cmd+shift+a"
       },
       {
-        "command": "aiCodePartner.inlineEdit",
+        "command": "intelliCodeFabric.inlineEdit",
         "key": "ctrl+shift+e",
         "mac": "cmd+shift+e",
         "when": "editorHasSelection"
       },
       {
-        "command": "aiCodePartner.generateCode",
+        "command": "intelliCodeFabric.generateCode",
         "key": "ctrl+shift+g",
         "mac": "cmd+shift+g"
       }
     ],
     "configuration": {
-      "title": "AI Code Partner",
+      "title": "IntelliCode Fabric",
       "properties": {
-        "aiCodePartner.serverUrl": {
+        "intelliCodeFabric.serverUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8765",
           "description": "Backend server URL"
         },
-        "aiCodePartner.autoIndex": {
+        "intelliCodeFabric.autoIndex": {
           "type": "boolean",
           "default": true,
           "description": "Automatically index project on startup"
         },
-        "aiCodePartner.pythonPath": {
+        "intelliCodeFabric.pythonPath": {
           "type": "string",
           "default": "python",
           "description": "Path to Python interpreter"

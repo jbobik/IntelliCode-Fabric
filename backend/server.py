@@ -1,5 +1,5 @@
 """
-AI Code Partner — FastAPI Backend
+IntelliCode Fabric — FastAPI Backend
 """
 
 import asyncio
@@ -36,7 +36,7 @@ _download_progress: dict[str, dict] = {}
 async def lifespan(app: FastAPI):
     global embedding_engine, llm_engine, rag_engine, orchestrator
 
-    logger.info("Starting AI Code Partner backend...")
+    logger.info("Starting IntelliCode Fabric backend...")
 
     from embeddings import EmbeddingEngine
     from llm_inference import LLMInference
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     logger.info("Backend shut down.")
 
 
-app = FastAPI(title="AI Code Partner", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="IntelliCode Fabric", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -112,6 +112,16 @@ class FineTuneRequest(BaseModel):
 class LoadAdapterRequest(BaseModel):
     adapter_id: str
 
+class CustomModelLoadRequest(BaseModel):
+    repo: str          # HuggingFace repo ID or local path
+    name: str          # Display name
+    quantization: str = "4bit"  # 4bit, 8bit, none
+
+
+class CustomModelDownloadRequest(BaseModel):
+    repo: str
+    name: str
+    quantization: str = "4bit"
 
 def find_model_info(model_id: str) -> Optional[dict]:
     for m in CONFIG["models"]["available"]:
@@ -220,6 +230,80 @@ def _make_download_callback(model_id: str):
             }
     return cb
 
+@app.post("/models/load-custom")
+async def load_custom_model(req: CustomModelLoadRequest):
+    """Load any model from HuggingFace repo or local path"""
+    global orchestrator
+    try:
+        logger.info(f"Loading custom model: {req.repo} (name={req.name}, quant={req.quantization})")
+
+        model_info = {
+            "id": req.name.lower().replace(" ", "-").replace("/", "-"),
+            "name": req.name,
+            "repo": req.repo,
+            "type": "causal",
+            "quantization": req.quantization if req.quantization != "none" else "",
+        }
+
+        await llm_engine.load_model(model_info)
+
+        from agents.orchestrator import AgentOrchestrator
+        orchestrator = AgentOrchestrator(llm_engine, rag_engine, CONFIG)
+
+        return {"status": "ok", "model_id": model_info["id"], "name": req.name}
+    except Exception as e:
+        logger.error(f"Custom model load failed: {e}\n{traceback.format_exc()}")
+        raise HTTPException(500, str(e))
+
+
+@app.post("/models/download-custom")
+async def download_custom_model(req: CustomModelDownloadRequest):
+    """Download any HuggingFace model and load it"""
+    global orchestrator
+    try:
+        model_id = req.name.lower().replace(" ", "-").replace("/", "-")
+        save_path = str(Path(__file__).parent.parent / "models" / model_id)
+
+        logger.info(f"Downloading custom model: {req.repo} → {save_path}")
+
+        # Download
+        from huggingface_hub import snapshot_download
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: snapshot_download(
+            repo_id=req.repo,
+            local_dir=save_path,
+            local_dir_use_symlinks=False,
+        ))
+
+        logger.info(f"Downloaded to {save_path}, now loading...")
+
+        # Load
+        model_info = {
+            "id": model_id,
+            "name": req.name,
+            "repo": save_path,  # use local path
+            "type": "causal",
+            "quantization": req.quantization if req.quantization != "none" else "",
+        }
+
+        await llm_engine.load_model(model_info)
+
+        from agents.orchestrator import AgentOrchestrator
+        orchestrator = AgentOrchestrator(llm_engine, rag_engine, CONFIG)
+
+        # Add to runtime model list so it shows up in /models
+        CONFIG["models"]["available"].append({
+            **model_info,
+            "ram_required": "?",
+            "description": f"Custom: {req.repo}",
+            "tier": "balanced",
+            "tags": ["custom"],
+        })
+
+        return {"status": "ok", "model_id": model_id, "path": save_path}
+    except Exception as e:
+        logger.error(f"Custom download failed: {e}\n{traceback.format_exc()}")
+        raise HTTPException(500, str(e))
 
 # ═══════════════════════════════════════════════
 #  Adapters (Fine-tuned)

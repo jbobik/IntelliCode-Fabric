@@ -10,7 +10,7 @@ let serverProcess: child_process.ChildProcess | null = null;
 export function activate(context: vscode.ExtensionContext) {
     console.log('AI Code Partner is activating...');
 
-    const serverUrl = vscode.workspace.getConfiguration('aiCodePartner').get<string>('serverUrl') || 'http://127.0.0.1:8765';
+    const serverUrl = vscode.workspace.getConfiguration('intelliCodeFabric').get<string>('serverUrl') || 'http://127.0.0.1:8765';
 
     // Initialize providers
     const sidebarProvider = new SidebarProvider(context.extensionUri, serverUrl);
@@ -19,28 +19,28 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register sidebar
     context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('aiCodePartner.sidebar', sidebarProvider)
+        vscode.window.registerWebviewViewProvider('intelliCodeFabric.sidebar', sidebarProvider)
     );
 
     // Register commands
     context.subscriptions.push(
-        vscode.commands.registerCommand('aiCodePartner.startServer', () => startServer(context)),
-        vscode.commands.registerCommand('aiCodePartner.indexProject', () => indexProject(serverUrl)),
-        vscode.commands.registerCommand('aiCodePartner.chat', () => {
-            vscode.commands.executeCommand('aiCodePartner.sidebar.focus');
+        vscode.commands.registerCommand('intelliCodeFabric.startServer', () => startServer(context)),
+        vscode.commands.registerCommand('intelliCodeFabric.indexProject', () => indexProject(serverUrl)),
+        vscode.commands.registerCommand('intelliCodeFabric.chat', () => {
+            vscode.commands.executeCommand('intelliCodeFabric.sidebar.focus');
         }),
-        vscode.commands.registerCommand('aiCodePartner.generateCode', () => handleGenerateCode(serverUrl)),
-        vscode.commands.registerCommand('aiCodePartner.refactorCode', () => handleRefactorCode(serverUrl)),
-        vscode.commands.registerCommand('aiCodePartner.generateTests', () => handleGenerateTests(serverUrl)),
-        vscode.commands.registerCommand('aiCodePartner.explainCode', () => handleExplainCode(serverUrl, sidebarProvider)),
-        vscode.commands.registerCommand('aiCodePartner.inlineEdit', () => inlineEditProvider.triggerInlineEdit()),
-        vscode.commands.registerCommand('aiCodePartner.selectModel', () => modelManager.showModelPicker()),
-        vscode.commands.registerCommand('aiCodePartner.downloadModel', () => modelManager.showDownloadPicker()),
-        vscode.commands.registerCommand('aiCodePartner.fineTune', () => handleFineTune(serverUrl)),
+        vscode.commands.registerCommand('intelliCodeFabric.generateCode', () => handleGenerateCode(serverUrl)),
+        vscode.commands.registerCommand('intelliCodeFabric.refactorCode', () => handleRefactorCode(serverUrl)),
+        vscode.commands.registerCommand('intelliCodeFabric.generateTests', () => handleGenerateTests(serverUrl)),
+        vscode.commands.registerCommand('intelliCodeFabric.explainCode', () => handleExplainCode(serverUrl, sidebarProvider)),
+        vscode.commands.registerCommand('intelliCodeFabric.inlineEdit', () => inlineEditProvider.triggerInlineEdit()),
+        vscode.commands.registerCommand('intelliCodeFabric.selectModel', () => modelManager.showModelPicker()),
+        vscode.commands.registerCommand('intelliCodeFabric.downloadModel', () => modelManager.showDownloadPicker()),
+        vscode.commands.registerCommand('intelliCodeFabric.fineTune', () => handleFineTune(serverUrl)),
     );
 
     // Auto-index on startup
-    const autoIndex = vscode.workspace.getConfiguration('aiCodePartner').get<boolean>('autoIndex');
+    const autoIndex = vscode.workspace.getConfiguration('intelliCodeFabric').get<boolean>('autoIndex');
     if (autoIndex) {
         // Delay to let server start
         setTimeout(() => {
@@ -51,7 +51,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Status bar
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBar.text = '$(hubot) AI Partner';
-    statusBar.command = 'aiCodePartner.chat';
+    statusBar.command = 'intelliCodeFabric.chat';
     statusBar.tooltip = 'Open AI Code Partner';
     statusBar.show();
     context.subscriptions.push(statusBar);
@@ -60,7 +60,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function startServer(context: vscode.ExtensionContext) {
-    const pythonPath = vscode.workspace.getConfiguration('aiCodePartner').get<string>('pythonPath') || 'python';
+    const pythonPath = vscode.workspace.getConfiguration('intelliCodeFabric').get<string>('pythonPath') || 'python';
     const serverScript = path.join(context.extensionPath, '..', 'backend', 'server.py');
 
     if (serverProcess) {
@@ -297,7 +297,7 @@ async function handleExplainCode(serverUrl: string, sidebarProvider: SidebarProv
         file: editor.document.fileName,
     });
 
-    vscode.commands.executeCommand('aiCodePartner.sidebar.focus');
+    vscode.commands.executeCommand('intelliCodeFabric.sidebar.focus');
 }
 
 async function handleFineTune(serverUrl: string) {

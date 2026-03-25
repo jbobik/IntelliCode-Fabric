@@ -345,7 +345,7 @@ class FineTuner:
     # ─────────────────────────────────────────────
 
     def _fine_tune_sync(self, model_info: dict, dataset: list[dict],
-                         epochs: int, project_path: str) -> dict:
+                        epochs: int, project_path: str) -> dict:
         global _fine_tune_status
         import torch
         import json
@@ -354,21 +354,26 @@ class FineTuner:
         try:
             from transformers import (
                 AutoModelForCausalLM, AutoTokenizer,
-                TrainingArguments, TrainerCallback,
+                TrainerCallback,
             )
             from peft import LoraConfig, get_peft_model
-            from trl import SFTTrainer
             from datasets import Dataset
         except ImportError as e:
-            raise RuntimeError(
-                f"Missing packages. Run: pip install peft trl datasets\nMissing: {e}"
-            )
+            raise RuntimeError(f"Missing packages. Run: pip install peft trl datasets\nMissing: {e}")
+
+        # Detect trl version and import accordingly
+        try:
+            from trl import SFTConfig, SFTTrainer
+            use_sft_config = True
+        except ImportError:
+            from trl import SFTTrainer
+            from transformers import TrainingArguments
+            use_sft_config = False
 
         repo = model_info["repo"]
         model_id = model_info["id"]
         project_name = Path(project_path).name
 
-        # Adapter saved per-project so multiple projects can coexist
         import hashlib
         proj_hash = hashlib.md5(project_path.encode()).hexdigest()[:8]
         adapter_name = f"{model_id}__{project_name}__{proj_hash}"
@@ -414,7 +419,6 @@ class FineTuner:
         _fine_tune_status["message"] = "Applying LoRA adapters..."
         _fine_tune_status["progress"] = 30
 
-        # Find target modules dynamically
         target_modules = self._find_target_modules(model)
         logger.info(f"LoRA target modules: {target_modules}")
 
@@ -447,23 +451,6 @@ class FineTuner:
 
         hf_dataset = Dataset.from_list(formatted)
 
-        training_args = TrainingArguments(
-            output_dir=adapter_path + "_checkpoints",
-            num_train_epochs=epochs,
-            per_device_train_batch_size=self.ft_config.get("batch_size", 2),
-            gradient_accumulation_steps=self.ft_config.get("gradient_accumulation_steps", 4),
-            learning_rate=self.ft_config.get("learning_rate", 2e-4),
-            warmup_ratio=self.ft_config.get("warmup_ratio", 0.03),
-            logging_steps=5,
-            save_strategy="epoch",
-            fp16=(device == "cuda"),
-            optim="adamw_torch",
-            report_to="none",
-            max_grad_norm=0.3,
-            lr_scheduler_type="cosine",
-            remove_unused_columns=False,
-        )
-
         _fine_tune_status["message"] = "Training in progress..."
         _fine_tune_status["progress"] = 40
 
@@ -482,17 +469,143 @@ class FineTuner:
                         ),
                     })
 
-        trainer = SFTTrainer(
-            model=model,
-            train_dataset=hf_dataset,
-            args=training_args,
-            tokenizer=tokenizer,
-            dataset_text_field="text",
-            max_seq_length=self.ft_config.get("max_seq_length", 1024),
-            callbacks=[ProgressCallback()],
+        # Build training arguments based on trl version
+        common_args = dict(
+            output_dir=adapter_path + "_checkpoints",
+            num_train_epochs=epochs,
+            per_device_train_batch_size=self.ft_config.get("batch_size", 2),
+            gradient_accumulation_steps=self.ft_config.get("gradient_accumulation_steps", 4),
+            learning_rate=self.ft_config.get("learning_rate", 2e-4),
+            warmup_ratio=self.ft_config.get("warmup_ratio", 0.03),
+            logging_steps=5,
+            save_strategy="epoch",
+            fp16=(device == "cuda"),
+            optim="adamw_torch",
+            report_to="none",
+            max_grad_norm=0.3,
+            lr_scheduler_type="cosine",
+            remove_unused_columns=False,
         )
 
-        logger.info("Starting training...")
+        max_seq_length = self.ft_config.get("max_seq_length", 1024)
+
+        # ══════════════════════════════════════════════════════════
+        #  trl API changes every version, so we try multiple ways
+        # ══════════════════════════════════════════════════════════
+
+        trainer = None
+        last_error = None
+
+        # ── Attempt 1: trl >= 0.20 (newest) ──
+        # SFTConfig does NOT accept max_seq_length; pass it to SFTTrainer
+        if trainer is None:
+            try:
+                from trl import SFTConfig, SFTTrainer
+                logger.info("Trying trl >= 0.20 style...")
+                training_args = SFTConfig(
+                    **common_args,
+                    dataset_text_field="text",
+                )
+                trainer = SFTTrainer(
+                    model=model,
+                    train_dataset=hf_dataset,
+                    args=training_args,
+                    processing_class=tokenizer,
+                    max_seq_length=max_seq_length,
+                    callbacks=[ProgressCallback()],
+                )
+                logger.info("SUCCESS: trl >= 0.20 style")
+            except TypeError as e:
+                last_error = e
+                trainer = None
+                logger.warning(f"trl >= 0.20 style failed: {e}")
+
+        # ── Attempt 2: trl 0.12-0.19 ──
+        # SFTConfig accepts max_seq_length
+        if trainer is None:
+            try:
+                from trl import SFTConfig, SFTTrainer
+                logger.info("Trying trl 0.12-0.19 style...")
+                training_args = SFTConfig(
+                    **common_args,
+                    dataset_text_field="text",
+                    max_seq_length=max_seq_length,
+                )
+                trainer = SFTTrainer(
+                    model=model,
+                    train_dataset=hf_dataset,
+                    args=training_args,
+                    processing_class=tokenizer,
+                    callbacks=[ProgressCallback()],
+                )
+                logger.info("SUCCESS: trl 0.12-0.19 style")
+            except TypeError as e:
+                last_error = e
+                trainer = None
+                logger.warning(f"trl 0.12-0.19 style failed: {e}")
+
+        # ── Attempt 3: trl < 0.12 (legacy) ──
+        if trainer is None:
+            try:
+                from trl import SFTTrainer
+                from transformers import TrainingArguments
+                logger.info("Trying legacy trl style...")
+                training_args = TrainingArguments(**common_args)
+                trainer = SFTTrainer(
+                    model=model,
+                    train_dataset=hf_dataset,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    dataset_text_field="text",
+                    max_seq_length=max_seq_length,
+                    callbacks=[ProgressCallback()],
+                )
+                logger.info("SUCCESS: legacy trl style")
+            except TypeError as e:
+                last_error = e
+                trainer = None
+                logger.warning(f"Legacy trl style failed: {e}")
+
+        # ── Attempt 4: raw Trainer fallback ──
+        if trainer is None:
+            try:
+                from transformers import TrainingArguments, Trainer
+                logger.info("Falling back to raw HF Trainer...")
+                training_args = TrainingArguments(**common_args)
+
+                # Tokenize dataset manually
+                def tokenize_fn(examples):
+                    return tokenizer(
+                        examples["text"],
+                        truncation=True,
+                        max_length=max_seq_length,
+                        padding="max_length",
+                    )
+
+                tokenized_dataset = hf_dataset.map(
+                    tokenize_fn, batched=True, remove_columns=["text"]
+                )
+                # Set labels = input_ids for causal LM
+                tokenized_dataset = tokenized_dataset.map(
+                    lambda x: {"labels": x["input_ids"]}, batched=True
+                )
+
+                trainer = Trainer(
+                    model=model,
+                    train_dataset=tokenized_dataset,
+                    args=training_args,
+                    callbacks=[ProgressCallback()],
+                )
+                logger.info("SUCCESS: raw HF Trainer fallback")
+            except Exception as e:
+                raise RuntimeError(
+                    f"All trainer initialization methods failed.\n"
+                    f"Last error: {last_error}\n"
+                    f"Fallback error: {e}\n"
+                    f"trl version: check with 'pip show trl'"
+                )
+
+        logger.info(f"Starting training: {len(formatted)} examples, {epochs} epochs")
         trainer.train()
 
         _fine_tune_status["message"] = "Saving adapter..."
@@ -501,7 +614,6 @@ class FineTuner:
         model.save_pretrained(adapter_path)
         tokenizer.save_pretrained(adapter_path)
 
-        # Save metadata for UI display
         meta = {
             "model_id": model_id,
             "model_name": model_info["name"],
