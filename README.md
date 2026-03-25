@@ -8,7 +8,7 @@ RAG · Мультиагенты · Локальный инференс · Fine-T
 
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.85+-007ACC?logo=visual-studio-code&logoColor=white)](https://code.visualstudio.com/)
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache-green.svg)](LICENSE)
 [![Local](https://img.shields.io/badge/Инференс-100%25_Локальный-brightgreen)](#)
 [![Fine-tune](https://img.shields.io/badge/Fine--tune-QLoRA-blueviolet)](#-дообучение-fine-tuning)
 
