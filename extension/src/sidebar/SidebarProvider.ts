@@ -30,13 +30,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             switch (msg.type) {
                 case 'chat': await this._handleChat(msg); break;
                 case 'getModels': await this._sendModelList(); break;
-                case 'getAdapters': await this._sendAdapterList(); break;
+                case 'loadCustomModel':
+                    await this._loadCustomModel(msg.repo, msg.name, msg.quantization);
+                    break;
+                case 'downloadCustomModel':
+                    await this._downloadCustomModel(msg.repo, msg.name, msg.quantization);
+                    break;
+                case 'getAdapters':
+                    await this._sendAdapterList();
+                    break;
                 case 'loadModel': await this._loadModel(msg.modelId, msg.adapterId); break;
                 case 'startDownload': await this._downloadModel(msg.modelId); break;
-                case 'getDownloadProgress': await this._sendDownloadProgress(msg.modelId); break;
+                case 'getDownloadProgress':
+                    await this._sendDownloadProgress(msg.modelId);
+                    break;
                 case 'indexProject': vscode.commands.executeCommand('aiCodePartner.indexProject'); break;
                 case 'fineTune': await this._startFineTune(msg.modelId, msg.epochs, msg.strategies); break;
-                case 'getFtStatus': await this._sendFtStatus(); break;
+                case 'getFtStatus':
+                    await this._sendFtStatus();
+                    break;
                 case 'insertCode': this._insertCode(msg.code); break;
             }
         });
@@ -102,7 +114,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch {
             this._view?.webview.postMessage({
                 type: 'error',
-                content: 'Cannot connect to backend. Run: cd backend && python server.py',
+                content: 'Cannot connect to backend. Run : cd backend && python server.py',
             });
         }
     }
@@ -147,29 +159,84 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _sendDownloadProgress(modelId: string) {
+    // ─── Custom Models ─────────────────────────────────────────
+
+    private async _loadCustomModel(repo: string, name: string, quantization: string) {
         try {
-            const r = await fetch(`${this._serverUrl}/models/download-progress/${modelId}`);
-            if (!r.ok) return;
-            const data = await r.json() as any;
             this._view?.webview.postMessage({
-                type: 'downloadProgress',
-                modelId,
-                progress: data.progress || 0,
-                message: data.message || '',
+                type: 'status',
+                content: `Loading ${name}...`,
             });
-        } catch { /* silent */ }
+
+            const response = await fetch(`${this._serverUrl}/models/load-custom`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repo, name, quantization }),
+            });
+
+            if (!response.ok) {
+                throw new Error(await response.text());
+            }
+
+            const result = (await response.json()) as any;
+
+            this._view?.webview.postMessage({
+                type: 'modelLoaded',
+                modelId: result.model_id || name,
+            });
+
+            vscode.window.showInformationMessage(`Custom model ${name} loaded!`);
+        } catch (error: any) {
+            this._view?.webview.postMessage({
+                type: 'error',
+                content: `Failed to load custom model: ${error.message}`,
+            });
+        }
+    }
+
+    private async _downloadCustomModel(repo: string, name: string, quantization: string) {
+        try {
+            this._view?.webview.postMessage({
+                type: 'status',
+                content: `Downloading ${repo}...`,
+            });
+
+            const response = await fetch(`${this._serverUrl}/models/download-custom`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repo, name, quantization }),
+            });
+
+            if (!response.ok) {
+                throw new Error(await response.text());
+            }
+
+            this._view?.webview.postMessage({
+                type: 'modelLoaded',
+                modelId: name,
+            });
+
+            vscode.window.showInformationMessage(`Custom model ${name} downloaded and loaded!`);
+            await this._sendModelList();
+        } catch (error: any) {
+            this._view?.webview.postMessage({
+                type: 'error',
+                content: `Failed: ${error.message}`,
+            });
+        }
     }
 
     // ─── Adapters ──────────────────────────────────────────────
 
     private async _sendAdapterList() {
         try {
-            const r = await fetch(`${this._serverUrl}/adapters`);
-            if (!r.ok) return;
-            const data = await r.json() as any;
-            this._view?.webview.postMessage({ type: 'adapterList', adapters: data.adapters });
-        } catch { /* silent */ }
+            const response = await fetch(`${this._serverUrl}/adapters`);
+            const data = await response.json();
+            this._view?.webview.postMessage({
+                type: 'adapterList',
+                ...(data as any),
+            });
+        } catch (_e) {}
     }
 
     // ─── Fine-tune ─────────────────────────────────────────────
@@ -201,11 +268,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private async _sendFtStatus() {
         try {
-            const r = await fetch(`${this._serverUrl}/fine-tune/status`);
-            if (!r.ok) return;
-            const data = await r.json();
-            this._view?.webview.postMessage({ type: 'ftStatus', status: data });
-        } catch { /* silent */ }
+            const response = await fetch(`${this._serverUrl}/fine-tune/status`);
+            const data = await response.json();
+            this._view?.webview.postMessage({
+                type: 'ftStatus',
+                status: data as any,
+            });
+        } catch (_e) {}
+    }
+
+    // ─── Progress ──────────────────────────────────────────────
+
+    private async _sendDownloadProgress(modelId: string) {
+        try {
+            const response = await fetch(`${this._serverUrl}/models/download-progress/${modelId}`);
+            const data = await response.json();
+            this._view?.webview.postMessage({
+                type: 'downloadProgress',
+                modelId,
+                ...(data as any),
+            });
+        } catch (_e) {}
     }
 
     // ─── Code ──────────────────────────────────────────────────

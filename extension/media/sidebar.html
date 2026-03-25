@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Code Partner</title>
+    <title>IntelliCode-Fabric</title>
     <link rel="stylesheet" href="{{styleUri}}">
 </head>
 <body>
@@ -12,7 +12,7 @@
 <div class="topbar">
     <div class="topbar-left">
         <span class="logo-icon">⬡</span>
-        <span class="logo-text">Code Partner</span>
+        <span class="logo-text">IntelliCode</span>
     </div>
     <div class="topbar-right">
         <div class="status-pill" id="statusPill">
@@ -74,6 +74,39 @@
                 <div class="progress-bar-fill" id="downloadProgressBar" style="width:0%"></div>
             </div>
         </div>
+
+        <!-- Custom model loader -->
+        <div class="custom-model-section">
+            <div class="picker-header">
+                <span>Load Custom Model</span>
+            </div>
+            <div style="padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;">
+                <label class="ft-label">HuggingFace repo or local path</label>
+                <input class="ft-select" type="text" id="customModelInput"
+                       placeholder="e.g. Qwen/Qwen2.5-Coder-3B-Instruct or C:\models\my-model">
+
+                <label class="ft-label">Display name <span class="hint">(optional)</span></label>
+                <input class="ft-select" type="text" id="customModelName" placeholder="My Custom Model">
+
+                <label class="ft-label">Quantization</label>
+                <select class="ft-select" id="customModelQuant">
+                    <option value="4bit">4-bit (recommended, saves RAM)</option>
+                    <option value="8bit">8-bit</option>
+                    <option value="none">None (full precision)</option>
+                </select>
+
+                <div style="display:flex; gap:6px;">
+                    <button class="action-btn primary" id="loadCustomModelBtn" style="flex:1">▶ Load</button>
+                    <button class="action-btn secondary" id="downloadCustomModelBtn" style="flex:1">⬇ Download & Load</button>
+                </div>
+
+                <div class="ft-label hint" style="text-transform:none; letter-spacing:0; font-weight:400; line-height: 1.4;">
+                    💡 Enter any HuggingFace model ID to download, or a local path to a model/adapter folder.
+                    Fine-tuned adapters from the 🎯 Fine-tune panel appear automatically.
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- Quick action row -->
@@ -96,7 +129,7 @@
         <select class="ft-select" id="ftModelSelect"></select>
 
         <label class="ft-label">Epochs <span class="hint">(2-5 recommended)</span></label>
-        <input class="ft-input" type="number" id="ftEpochs" value="3" min="1" max="10">
+        <input class="ft-input" type="number" id="ftEpochs" value="3" min="1" max="1000">
 
         <label class="ft-label">Training strategies</label>
         <div class="ft-strategies" id="ftStrategies">
@@ -127,7 +160,7 @@
 <div class="chat-area" id="chatArea">
     <div class="welcome-state" id="welcomeState">
         <div class="welcome-glyph">⬡</div>
-        <h3>AI Code Partner</h3>
+        <h3>IntelliCode-Fabric</h3>
         <p>Your fully-local AI dev assistant. No API keys. No subscriptions. Your code never leaves your machine.</p>
         <div class="welcome-steps">
             <div class="step"><span class="step-num">1</span><span>Start backend: <code>cd backend && python server.py</code></span></div>

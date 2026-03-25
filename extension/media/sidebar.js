@@ -220,6 +220,50 @@
         addSystemMsg('Adapter removed. Reload model to use base weights.');
     });
 
+
+    // ════════════════════════════════════════════
+    //  CUSTOM MODEL LOADING
+    // ════════════════════════════════════════════
+
+    const customModelInput = document.getElementById('customModelInput');
+    const customModelName = document.getElementById('customModelName');
+    const customModelQuant = document.getElementById('customModelQuant');
+    const loadCustomModelBtn = document.getElementById('loadCustomModelBtn');
+    const downloadCustomModelBtn = document.getElementById('downloadCustomModelBtn');
+
+    loadCustomModelBtn.addEventListener('click', () => {
+        const repo = customModelInput.value.trim();
+        if (!repo) { addSystemMsg('Please enter a model path or HuggingFace repo ID'); return; }
+        const name = customModelName.value.trim() || repo.split('/').pop();
+        const quant = customModelQuant.value;
+        addSystemMsg(`Loading custom model: ${name}...`);
+        setStatus('loading', 'Loading...');
+        modelPicker.style.display = 'none';
+        vscode.postMessage({
+            type: 'loadCustomModel',
+            repo: repo,
+            name: name,
+            quantization: quant,
+        });
+    });
+
+    downloadCustomModelBtn.addEventListener('click', () => {
+        const repo = customModelInput.value.trim();
+        if (!repo) { addSystemMsg('Please enter a HuggingFace repo ID'); return; }
+        if (repo.startsWith('/') || repo.startsWith('C:') || repo.startsWith('~')) {
+            addSystemMsg('Local path detected — use Load instead of Download');
+            return;
+        }
+        const name = customModelName.value.trim() || repo.split('/').pop();
+        addSystemMsg(`Downloading ${repo}... This may take a while.`);
+        vscode.postMessage({
+            type: 'downloadCustomModel',
+            repo: repo,
+            name: name,
+            quantization: customModelQuant.value,
+        });
+    });
+
     // ════════════════════════════════════════════
     //  FINE-TUNE PANEL
     // ════════════════════════════════════════════
