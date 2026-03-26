@@ -1,5 +1,6 @@
 """
-Tester Agent — генерирует unit-тесты, определяет фреймворк автоматически.
+Tester Agent v3 — генерирует unit-тесты, определяет фреймворк автоматически.
+Теперь с поддержкой lang_instruction.
 """
 
 import re
@@ -18,9 +19,17 @@ class TesterAgent:
     def __init__(self, llm):
         self.llm = llm
 
+    async def analyze(self, question, context, history=None, lang_instruction=""):
+        from .orchestrator import sanitize_response  # добавить импорт
+        prompt = self._build_prompt(question, context, history or [], lang_instruction)
+        response = await self.llm.generate(prompt)
+        response = _strip_think(response)
+        response = sanitize_response(response)  # ← ДОБАВИТЬ
+        references = self._extract_references(response)
+        return {"response": response, "references": references}
+
     async def generate_tests(self, code: str, instruction: str = "",
-                             context: str = "") -> dict:
-        """Генерирует тесты для данного кода"""
+                             context: str = "", lang_instruction: str = "") -> dict:
 
         language = self._detect_language(code)
         framework = self._suggest_framework(language)
@@ -29,6 +38,7 @@ class TesterAgent:
             "<|system|>\n"
             f"You are an expert test engineer. Generate comprehensive tests using {framework}.\n"
             "CRITICAL: Do NOT output <think> tags or internal reasoning. Output only the final tests.\n\n"
+            f"{lang_instruction}\n\n"
             "Rules:\n"
             "1. Cover all public functions/methods\n"
             "2. Include edge cases, error cases, and boundary conditions\n"

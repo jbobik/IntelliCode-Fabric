@@ -25,8 +25,6 @@
 
 <!-- ══════════════ MODEL PANEL ══════════════ -->
 <div class="model-panel" id="modelPanel">
-
-    <!-- Active model display -->
     <div class="active-model-row" id="activeModelRow">
         <div class="active-model-info">
             <span class="active-model-label">Модель</span>
@@ -35,76 +33,57 @@
         <button class="pill-btn" id="changeModelBtn">Выбрать ▾</button>
     </div>
 
-    <!-- Adapter badge (shown when fine-tuned adapter active) -->
     <div class="adapter-badge-row" id="adapterBadgeRow" style="display:none">
         <span class="adapter-tag">🎯 Дообучена:</span>
         <span class="adapter-name" id="activeAdapterName">–</span>
         <button class="adapter-remove" id="removeAdapterBtn" title="Убрать адаптер">✕</button>
     </div>
 
-    <!-- Model picker dropdown (hidden by default) -->
+    <!-- Model picker -->
     <div class="model-picker" id="modelPicker" style="display:none">
         <div class="picker-header">
             <span>Выбор модели</span>
             <button class="icon-btn" id="closePickerBtn">✕</button>
         </div>
-
-        <div class="picker-tiers" id="pickerTiers">
-            <!-- dynamically filled -->
-        </div>
-
-        <!-- Adapter selector -->
+        <div class="picker-tiers" id="pickerTiers"></div>
         <div class="adapter-section" id="adapterSection" style="display:none">
             <div class="adapter-section-title">
-                🎯 Дообученные адаптеры
-                <span class="hint">(необязательно)</span>
+                🎯 Дообученные адаптеры <span class="hint">(все версии)</span>
             </div>
             <div class="adapter-list" id="adapterList"></div>
         </div>
-
         <div class="picker-actions">
             <button class="action-btn primary" id="loadSelectedBtn">▶ Загрузить</button>
             <button class="action-btn secondary" id="downloadSelectedBtn">⬇ Скачать</button>
         </div>
-
-        <!-- Download progress -->
         <div class="download-progress-wrap" id="downloadProgressWrap" style="display:none">
             <div class="download-progress-label" id="downloadProgressLabel">Загрузка…</div>
             <div class="progress-bar-track">
                 <div class="progress-bar-fill" id="downloadProgressBar" style="width:0%"></div>
             </div>
         </div>
-
-        <!-- Custom model loader -->
         <div class="custom-model-section">
-            <div class="picker-header">
-                <span>Своя модель</span>
-            </div>
+            <div class="picker-header"><span>Своя модель (HuggingFace)</span></div>
             <div style="padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;">
                 <label class="ft-label">HuggingFace репозиторий или локальный путь</label>
                 <input class="ft-select" type="text" id="customModelInput"
                        placeholder="напр. Qwen/Qwen2.5-Coder-3B-Instruct">
-
                 <label class="ft-label">Отображаемое имя <span class="hint">(необязательно)</span></label>
                 <input class="ft-select" type="text" id="customModelName" placeholder="Моя модель">
-
                 <label class="ft-label">Квантование</label>
                 <select class="ft-select" id="customModelQuant">
-                    <option value="4bit">4-bit (рекомендуется, экономит память)</option>
+                    <option value="4bit">4-bit (рекомендуется)</option>
                     <option value="8bit">8-bit</option>
-                    <option value="none">Без квантования (полная точность)</option>
+                    <option value="none">Без квантования</option>
                 </select>
-
                 <div style="display:flex; gap:6px;">
                     <button class="action-btn primary" id="loadCustomModelBtn" style="flex:1">▶ Загрузить</button>
                     <button class="action-btn secondary" id="downloadCustomModelBtn" style="flex:1">⬇ Скачать и загрузить</button>
                 </div>
             </div>
         </div>
-
     </div>
 
-    <!-- Quick action row -->
     <div class="quick-header-row">
         <button class="icon-text-btn" id="indexBtn" title="Индексировать проект">📁 Индекс</button>
         <button class="icon-text-btn" id="fineTuneBtn" title="Дообучить на проекте">🎯 Fine-tune</button>
@@ -113,7 +92,7 @@
     </div>
 </div>
 
-<!-- ══════════════ FINE-TUNE PANEL ══════════════ -->
+<!-- ══════════════ FINE-TUNE PANEL (EXTENDED PARAMS) ══════════════ -->
 <div class="finetune-panel" id="finetunePanelEl" style="display:none">
     <div class="panel-header">
         <span>Дообучение на проекте</span>
@@ -135,6 +114,37 @@
             <label class="ft-check"><input type="checkbox" value="function_signature" checked> Сигнатура → Тело</label>
             <label class="ft-check"><input type="checkbox" value="test_to_impl"> Тест → Реализация</label>
         </div>
+
+        <!-- Extended training params -->
+        <details class="ft-advanced-toggle">
+            <summary class="ft-advanced-summary">⚙ Расширенные параметры</summary>
+            <div class="ft-advanced-grid">
+                <div class="ft-param">
+                    <label class="ft-label">Learning Rate</label>
+                    <input class="ft-input" type="number" id="ftLearningRate" value="0.0002" step="0.0001" min="0.00001" max="0.01">
+                </div>
+                <div class="ft-param">
+                    <label class="ft-label">Batch Size</label>
+                    <input class="ft-input" type="number" id="ftBatchSize" value="2" min="1" max="32">
+                </div>
+                <div class="ft-param">
+                    <label class="ft-label">Gradient Accum</label>
+                    <input class="ft-input" type="number" id="ftGradAccum" value="4" min="1" max="64">
+                </div>
+                <div class="ft-param">
+                    <label class="ft-label">LoRA Rank (r)</label>
+                    <input class="ft-input" type="number" id="ftLoraR" value="16" min="4" max="128">
+                </div>
+                <div class="ft-param">
+                    <label class="ft-label">LoRA Alpha</label>
+                    <input class="ft-input" type="number" id="ftLoraAlpha" value="32" min="8" max="256">
+                </div>
+                <div class="ft-param">
+                    <label class="ft-label">Max Seq Length</label>
+                    <input class="ft-input" type="number" id="ftMaxSeqLen" value="1024" min="256" max="4096" step="128">
+                </div>
+            </div>
+        </details>
 
         <button class="action-btn primary full-width" id="startFtBtn">🚀 Запустить дообучение</button>
     </div>
@@ -191,14 +201,12 @@
 
 <!-- ══════════════ INPUT AREA ══════════════ -->
 <div class="input-area">
-    <!-- Качественные русские промты -->
     <div class="quick-prompts" id="quickPrompts">
         <button class="qp-chip" data-prompt="Где в этом проекте реализована аутентификация и авторизация? Покажи все связанные файлы и логику.">🔐 Аутентификация</button>
         <button class="qp-chip" data-prompt="Опиши архитектуру проекта: основные модули, их взаимодействие и потоки данных.">🏗️ Архитектура</button>
         <button class="qp-chip" data-prompt="Найди потенциальные баги, уязвимости безопасности и проблемные места в коде. Объясни каждую проблему.">🐛 Найти баги</button>
         <button class="qp-chip" data-prompt="Перечисли все API-эндпоинты проекта: метод, путь, параметры и что они делают.">🌐 API эндпоинты</button>
-        <button class="qp-chip" data-prompt="Что можно улучшить в этом коде? Предложи конкретные рефакторинги с объяснением пользы.">✨ Предложить улучшения</button>
-        <button class="qp-chip" data-prompt="Объясни поток выполнения запроса от пользователя до базы данных и обратно.">🔄 Поток данных</button>
+        <button class="qp-chip" data-prompt="Что можно улучшить в этом коде? Предложи конкретные рефакторинги с объяснением пользы.">✨ Улучшения</button>
         <button class="qp-chip" data-prompt="Какие зависимости использует проект? Есть ли устаревшие или проблемные пакеты?">📦 Зависимости</button>
     </div>
     <div class="input-row">

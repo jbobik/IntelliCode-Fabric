@@ -1,5 +1,6 @@
 """
-Refactor Agent — рефакторит код с применением паттернов проектирования.
+Refactor Agent v3 — рефакторит код с применением паттернов проектирования.
+Теперь с поддержкой lang_instruction.
 """
 
 import re
@@ -14,14 +15,22 @@ def _strip_think(text: str) -> str:
     cleaned = re.sub(r"</?think>", "", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
-
 class RefactorAgent:
     def __init__(self, llm):
         self.llm = llm
 
+    async def analyze(self, question, context, history=None, lang_instruction=""):
+        from .orchestrator import sanitize_response  # добавить импорт
+        prompt = self._build_prompt(question, context, history or [], lang_instruction)
+        response = await self.llm.generate(prompt)
+        response = _strip_think(response)
+        response = sanitize_response(response)  # ← ДОБАВИТЬ
+        references = self._extract_references(response)
+        return {"response": response, "references": references}
+
     async def refactor(self, code: str, instruction: str,
-                       context: str = "", pattern: Optional[str] = None) -> dict:
-        """Рефакторит код по инструкции"""
+                       context: str = "", pattern: Optional[str] = None,
+                       lang_instruction: str = "") -> dict:
 
         pattern_hint = ""
         if pattern:
@@ -41,6 +50,7 @@ class RefactorAgent:
             "<|system|>\n"
             "You are an expert software architect and refactoring specialist.\n"
             "CRITICAL: Do NOT output <think> tags or internal reasoning. Output only your final refactored code and explanation.\n\n"
+            f"{lang_instruction}\n\n"
             "Rules:\n"
             "1. Preserve the original functionality exactly\n"
             "2. Improve code quality, readability, and maintainability\n"

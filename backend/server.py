@@ -1,5 +1,13 @@
 """
-IntelliCode Fabric — FastAPI Backend
+IntelliCode Fabric — FastAPI Backend v3.0
+
+Improvements:
+- Custom models properly added to list and status shown
+- Separate /retrieve endpoint (not through /chat)
+- Fine-tune with extended params (learning_rate, batch_size, lora_r, etc.)
+- Fine-tune timeout fix (background task + proper status polling)
+- Streaming via WebSocket with thinking blocks
+- All fine-tuned adapter versions shown (not just last)
 """
 
 import asyncio
@@ -12,7 +20,7 @@ from typing import Optional
 
 import uvicorn
 import yaml
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -31,12 +39,15 @@ orchestrator = None
 # Download progress tracker
 _download_progress: dict[str, dict] = {}
 
+# Runtime custom models (persist across sessions via list)
+_custom_models: list[dict] = []
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global embedding_engine, llm_engine, rag_engine, orchestrator
 
-    logger.info("Starting IntelliCode Fabric backend...")
+    logger.info("Starting IntelliCode Fabric backend v3...")
 
     from embeddings import EmbeddingEngine
     from llm_inference import LLMInference
@@ -50,6 +61,9 @@ async def lifespan(app: FastAPI):
     llm_engine = LLMInference(CONFIG)
     orchestrator = AgentOrchestrator(llm_engine, rag_engine, CONFIG)
 
+    # Load saved custom models list
+    _load_custom_models_list()
+
     logger.info("Backend initialized.")
     yield
 
@@ -58,13 +72,13 @@ async def lifespan(app: FastAPI):
     logger.info("Backend shut down.")
 
 
-app = FastAPI(title="IntelliCode Fabric", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="IntelliCode Fabric", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 
 # ═══════════════════════════════════════════════
-#  Models
+#  Pydantic Models
 # ═══════════════════════════════════════════════
 
 class IndexRequest(BaseModel):
@@ -98,7 +112,7 @@ class InlineEditRequest(BaseModel):
 
 class ModelSelectRequest(BaseModel):
     model_id: str
-    adapter_id: Optional[str] = None  # load with fine-tuned adapter
+    adapter_id: Optional[str] = None
 
 class ModelDownloadRequest(BaseModel):
     model_id: str
@@ -108,26 +122,62 @@ class FineTuneRequest(BaseModel):
     model_id: Optional[str] = None
     epochs: int = 3
     strategies: Optional[list[str]] = None
+    # Extended params
+    learning_rate: Optional[float] = None
+    batch_size: Optional[int] = None
+    gradient_accumulation_steps: Optional[int] = None
+    lora_r: Optional[int] = None
+    lora_alpha: Optional[int] = None
+    lora_dropout: Optional[float] = None
+    max_seq_length: Optional[int] = None
+    warmup_ratio: Optional[float] = None
 
 class LoadAdapterRequest(BaseModel):
     adapter_id: str
 
 class CustomModelLoadRequest(BaseModel):
-    repo: str          # HuggingFace repo ID or local path
-    name: str          # Display name
-    quantization: str = "4bit"  # 4bit, 8bit, none
-
+    repo: str
+    name: str
+    quantization: str = "4bit"
 
 class CustomModelDownloadRequest(BaseModel):
     repo: str
     name: str
     quantization: str = "4bit"
 
+class RetrieveRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+
 def find_model_info(model_id: str) -> Optional[dict]:
     for m in CONFIG["models"]["available"]:
         if m["id"] == model_id:
             return m
+    # Also check custom models
+    for m in _custom_models:
+        if m["id"] == model_id:
+            return m
     return None
+
+
+def _load_custom_models_list():
+    """Load list of previously added custom models"""
+    global _custom_models
+    custom_path = Path(__file__).parent.parent / "data" / "custom_models.json"
+    if custom_path.exists():
+        try:
+            _custom_models = json.loads(custom_path.read_text())
+            logger.info(f"Loaded {len(_custom_models)} custom models from disk")
+        except Exception:
+            _custom_models = []
+
+
+def _save_custom_models_list():
+    """Save custom models list to disk"""
+    custom_path = Path(__file__).parent.parent / "data" / "custom_models.json"
+    custom_path.parent.mkdir(parents=True, exist_ok=True)
+    custom_path.write_text(json.dumps(_custom_models, indent=2))
 
 
 # ═══════════════════════════════════════════════
@@ -152,7 +202,17 @@ async def health():
 async def list_models():
     models_dir = Path(__file__).parent.parent / "models"
     result = []
-    for m in CONFIG["models"]["available"]:
+
+    # Built-in models
+    all_models = CONFIG["models"]["available"] + _custom_models
+
+    # Deduplicate by id
+    seen_ids = set()
+    for m in all_models:
+        if m["id"] in seen_ids:
+            continue
+        seen_ids.add(m["id"])
+
         model_path = models_dir / m["id"]
         downloaded = False
         if model_path.exists():
@@ -160,6 +220,11 @@ async def list_models():
                 downloaded = any(model_path.iterdir())
             except Exception:
                 downloaded = False
+
+        # For custom models loaded from HF directly, check if engine has it
+        if not downloaded and llm_engine and llm_engine.current_model_id == m["id"]:
+            downloaded = True
+
         in_progress = _download_progress.get(m["id"], {})
         result.append({
             **m,
@@ -167,6 +232,7 @@ async def list_models():
             "active": (llm_engine.current_model_id == m["id"]) if llm_engine else False,
             "download_progress": in_progress.get("progress", 0) if in_progress.get("running") else None,
         })
+
     return {"models": result, "default": CONFIG["models"]["default"]}
 
 
@@ -230,6 +296,7 @@ def _make_download_callback(model_id: str):
             }
     return cb
 
+
 @app.post("/models/load-custom")
 async def load_custom_model(req: CustomModelLoadRequest):
     """Load any model from HuggingFace repo or local path"""
@@ -237,8 +304,10 @@ async def load_custom_model(req: CustomModelLoadRequest):
     try:
         logger.info(f"Loading custom model: {req.repo} (name={req.name}, quant={req.quantization})")
 
+        model_id = req.name.lower().replace(" ", "-").replace("/", "-")
+
         model_info = {
-            "id": req.name.lower().replace(" ", "-").replace("/", "-"),
+            "id": model_id,
             "name": req.name,
             "repo": req.repo,
             "type": "causal",
@@ -250,7 +319,10 @@ async def load_custom_model(req: CustomModelLoadRequest):
         from agents.orchestrator import AgentOrchestrator
         orchestrator = AgentOrchestrator(llm_engine, rag_engine, CONFIG)
 
-        return {"status": "ok", "model_id": model_info["id"], "name": req.name}
+        # Add to custom models list (persistent)
+        _add_custom_model(model_info, req.repo)
+
+        return {"status": "ok", "model_id": model_id, "name": req.name}
     except Exception as e:
         logger.error(f"Custom model load failed: {e}\n{traceback.format_exc()}")
         raise HTTPException(500, str(e))
@@ -266,7 +338,6 @@ async def download_custom_model(req: CustomModelDownloadRequest):
 
         logger.info(f"Downloading custom model: {req.repo} → {save_path}")
 
-        # Download
         from huggingface_hub import snapshot_download
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: snapshot_download(
@@ -277,11 +348,10 @@ async def download_custom_model(req: CustomModelDownloadRequest):
 
         logger.info(f"Downloaded to {save_path}, now loading...")
 
-        # Load
         model_info = {
             "id": model_id,
             "name": req.name,
-            "repo": save_path,  # use local path
+            "repo": save_path,
             "type": "causal",
             "quantization": req.quantization if req.quantization != "none" else "",
         }
@@ -291,22 +361,38 @@ async def download_custom_model(req: CustomModelDownloadRequest):
         from agents.orchestrator import AgentOrchestrator
         orchestrator = AgentOrchestrator(llm_engine, rag_engine, CONFIG)
 
-        # Add to runtime model list so it shows up in /models
-        CONFIG["models"]["available"].append({
-            **model_info,
-            "ram_required": "?",
-            "description": f"Custom: {req.repo}",
-            "tier": "balanced",
-            "tags": ["custom"],
-        })
+        # Add to custom models list (persistent)
+        _add_custom_model(model_info, req.repo)
 
         return {"status": "ok", "model_id": model_id, "path": save_path}
     except Exception as e:
         logger.error(f"Custom download failed: {e}\n{traceback.format_exc()}")
         raise HTTPException(500, str(e))
 
+
+def _add_custom_model(model_info: dict, original_repo: str):
+    """Add custom model to persistent list"""
+    # Check if already exists
+    for m in _custom_models:
+        if m["id"] == model_info["id"]:
+            return
+
+    _custom_models.append({
+        "id": model_info["id"],
+        "name": model_info["name"],
+        "repo": original_repo,
+        "type": "causal",
+        "quantization": model_info.get("quantization", "4bit"),
+        "ram_required": "?",
+        "description": f"Custom: {original_repo}",
+        "tier": "balanced",
+        "tags": ["custom"],
+    })
+    _save_custom_models_list()
+
+
 # ═══════════════════════════════════════════════
-#  Adapters (Fine-tuned)
+#  Adapters (Fine-tuned) — ALL versions shown
 # ═══════════════════════════════════════════════
 
 @app.get("/adapters")
@@ -338,6 +424,28 @@ async def index_project(req: IndexRequest):
         return {"status": "ok", "stats": stats}
     except Exception as e:
         logger.error(f"Indexing failed: {e}\n{traceback.format_exc()}")
+        raise HTTPException(500, str(e))
+
+
+# ═══════════════════════════════════════════════
+#  Retrieve — dedicated RAG endpoint
+# ═══════════════════════════════════════════════
+
+@app.post("/retrieve")
+async def retrieve(req: RetrieveRequest):
+    """
+    Dedicated retrieval endpoint — separate from /chat.
+    Returns relevant code chunks without LLM processing.
+    """
+    try:
+        chunks = await rag_engine.retrieve(req.query, top_k=req.top_k)
+        return {
+            "status": "ok",
+            "chunks": chunks,
+            "count": len(chunks),
+        }
+    except Exception as e:
+        logger.error(f"Retrieval error: {e}")
         raise HTTPException(500, str(e))
 
 
@@ -413,24 +521,68 @@ async def inline_edit(req: InlineEditRequest):
 
 
 # ═══════════════════════════════════════════════
-#  Fine-tuning
+#  Fine-tuning — runs as background task to avoid timeout
 # ═══════════════════════════════════════════════
 
 @app.post("/fine-tune")
-async def fine_tune(req: FineTuneRequest):
+async def fine_tune(req: FineTuneRequest, background_tasks: BackgroundTasks):
+    """
+    Starts fine-tuning as a BACKGROUND TASK.
+    This fixes the "fetch failed" error — the HTTP response returns immediately,
+    and fine-tuning runs in the background. Poll /fine-tune/status for progress.
+    """
     try:
         from fine_tuning import FineTuner
         tuner = FineTuner(CONFIG)
-        result = await tuner.fine_tune(
+
+        # Build override params
+        override_params = {}
+        if req.learning_rate is not None:
+            override_params["learning_rate"] = req.learning_rate
+        if req.batch_size is not None:
+            override_params["batch_size"] = req.batch_size
+        if req.gradient_accumulation_steps is not None:
+            override_params["gradient_accumulation_steps"] = req.gradient_accumulation_steps
+        if req.lora_r is not None:
+            override_params["lora_r"] = req.lora_r
+        if req.lora_alpha is not None:
+            override_params["lora_alpha"] = req.lora_alpha
+        if req.lora_dropout is not None:
+            override_params["lora_dropout"] = req.lora_dropout
+        if req.max_seq_length is not None:
+            override_params["max_seq_length"] = req.max_seq_length
+        if req.warmup_ratio is not None:
+            override_params["warmup_ratio"] = req.warmup_ratio
+
+        # Start in background — this is the key fix for "fetch failed"
+        background_tasks.add_task(
+            _run_fine_tune,
+            tuner=tuner,
             project_path=req.project_path,
             model_id=req.model_id or CONFIG["models"]["default"],
             epochs=req.epochs,
             strategies=req.strategies,
+            override_params=override_params,
         )
-        return result
+
+        return {"status": "ok", "message": "Fine-tuning started in background. Poll /fine-tune/status for progress."}
     except Exception as e:
         logger.error(f"Fine-tuning error: {e}\n{traceback.format_exc()}")
         raise HTTPException(500, str(e))
+
+
+async def _run_fine_tune(tuner, project_path, model_id, epochs, strategies, override_params):
+    """Background task for fine-tuning"""
+    try:
+        await tuner.fine_tune(
+            project_path=project_path,
+            model_id=model_id,
+            epochs=epochs,
+            strategies=strategies,
+            override_params=override_params,
+        )
+    except Exception as e:
+        logger.error(f"Background fine-tuning failed: {e}", exc_info=True)
 
 
 @app.get("/fine-tune/status")
@@ -440,7 +592,7 @@ async def fine_tune_status():
 
 
 # ═══════════════════════════════════════════════
-#  WebSocket streaming
+#  WebSocket streaming with thinking blocks
 # ═══════════════════════════════════════════════
 
 @app.websocket("/ws")
@@ -474,8 +626,31 @@ async def websocket_endpoint(ws: WebSocket):
                         "chat"
                     )
 
+                    in_think = False
+                    think_buffer = ""
+
                     async for token in llm_engine.generate_stream(prompt):
-                        await ws.send_text(json.dumps({"type": "token", "content": token}))
+                        # Detect thinking blocks and send them separately
+                        if "<think>" in token:
+                            in_think = True
+                            think_buffer = ""
+                            await ws.send_text(json.dumps({"type": "thinking_start"}))
+                            continue
+                        if "</think>" in token:
+                            in_think = False
+                            await ws.send_text(json.dumps({
+                                "type": "thinking_end",
+                                "content": think_buffer,
+                            }))
+                            continue
+                        if in_think:
+                            think_buffer += token
+                            await ws.send_text(json.dumps({
+                                "type": "thinking_token",
+                                "content": token,
+                            }))
+                        else:
+                            await ws.send_text(json.dumps({"type": "token", "content": token}))
 
                     await ws.send_text(json.dumps({
                         "type": "stream_end",

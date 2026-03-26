@@ -748,3 +748,178 @@ html, body {
 
 /* Scrollbar global */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* ─── ADDITIONS to sidebar.css ───
+   Add these rules at the end of the existing sidebar.css file.
+   They fix: table rendering, thinking blocks, streaming cursor,
+   per-block insert buttons, extended fine-tune params, custom model badge.
+*/
+
+/* ═══ MARKDOWN TABLES (FIX) ═══ */
+.md-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.md-table th,
+.md-table td {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    text-align: left;
+    word-break: break-word;
+}
+.md-table th {
+    background: rgba(88,166,255,0.08);
+    font-weight: 700;
+    color: var(--text);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.md-table td {
+    background: var(--bg2);
+    color: var(--text-dim);
+}
+.md-table tr:hover td {
+    background: rgba(255,255,255,0.03);
+}
+
+/* ═══ THINKING BLOCKS (collapsible) ═══ */
+.thinking-block {
+    margin: 6px 0;
+    border: 1px solid rgba(188,140,255,0.2);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: rgba(188,140,255,0.04);
+}
+.thinking-summary {
+    padding: 5px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--purple);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.thinking-summary::-webkit-details-marker { display: none; }
+.thinking-summary::before {
+    content: '▶';
+    font-size: 8px;
+    transition: transform 0.2s;
+}
+details.thinking-block[open] .thinking-summary::before {
+    transform: rotate(90deg);
+}
+.thinking-content {
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+    border-top: 1px solid rgba(188,140,255,0.15);
+    line-height: 1.5;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+/* ═══ STREAMING CURSOR ═══ */
+.streaming-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 14px;
+    background: var(--accent);
+    margin-left: 1px;
+    animation: blink-cursor 0.8s infinite;
+    vertical-align: text-bottom;
+}
+@keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+/* ═══ PER-CODE-BLOCK BUTTONS ═══ */
+.pre-btn-row {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    gap: 3px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.msg pre:hover .pre-btn-row { opacity: 1; }
+
+.insert-code-btn,
+.copy-code-btn {
+    padding: 2px 7px;
+    font-size: 9px;
+    font-weight: 700;
+    background: var(--border);
+    color: var(--text-dim);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.insert-code-btn {
+    background: rgba(88,166,255,0.2);
+    color: var(--accent);
+}
+.insert-code-btn:hover {
+    background: rgba(88,166,255,0.35);
+}
+.copy-code-btn:hover {
+    background: var(--border-active);
+    color: var(--text);
+}
+
+/* ═══ EXTENDED FINE-TUNE PARAMS ═══ */
+.ft-advanced-toggle {
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.ft-advanced-summary {
+    padding: 6px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    background: var(--bg3);
+}
+.ft-advanced-summary:hover {
+    color: var(--text);
+}
+.ft-advanced-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 8px 10px;
+}
+.ft-param {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.ft-param .ft-label {
+    font-size: 9px;
+}
+.ft-param .ft-input {
+    max-width: 100%;
+    font-size: 11px;
+    padding: 4px 6px;
+}
+
+/* ═══ CUSTOM MODEL BADGE ═══ */
+.badge-custom {
+    background: rgba(255,166,87,0.15);
+    color: var(--orange);
+}

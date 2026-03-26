@@ -1,5 +1,4 @@
+# agents/__init__.py
 from .orchestrator import AgentOrchestrator
-from .analyst import AnalystAgent
-from .coder import CoderAgent
-from .refactor import RefactorAgent
-from .tester import TesterAgent
+
+__all__ = ["AgentOrchestrator"]

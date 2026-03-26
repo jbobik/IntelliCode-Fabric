@@ -1,0 +1,15 @@
+[
+  {
+    "id": "qwen-qwen3.5-9b",
+    "name": "Qwen/Qwen3.5-9B",
+    "repo": "Qwen/Qwen3.5-9B",
+    "type": "causal",
+    "quantization": "",
+    "ram_required": "?",
+    "description": "Custom: Qwen/Qwen3.5-9B",
+    "tier": "balanced",
+    "tags": [
+      "custom"
+    ]
+  }
+]

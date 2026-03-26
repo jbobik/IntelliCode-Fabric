@@ -1,9 +1,8 @@
 """
-Coder Agent — генерирует код, реализует функции, inline-редактирование.
+Coder Agent v3 — генерирует код, реализует функции, inline-редактирование.
 
-Улучшения:
-- Убираем <think> теги из ответов
-- Лучший системный промт с явным запретом think-тегов
+Улучшения v3:
+- lang_instruction для ответов на языке пользователя
 - Улучшенная extraction кода из ответа
 """
 
@@ -15,24 +14,34 @@ logger = logging.getLogger(__name__)
 
 
 def _strip_think(text: str) -> str:
-    """Убирает <think>...</think> блоки из ответа"""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     cleaned = re.sub(r"</?think>", "", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
 
 class CoderAgent:
     def __init__(self, llm):
         self.llm = llm
 
+
+
+    async def analyze(self, question, context, history=None, lang_instruction=""):
+        from .orchestrator import sanitize_response  # добавить импорт
+        prompt = self._build_prompt(question, context, history or [], lang_instruction)
+        response = await self.llm.generate(prompt)
+        response = _strip_think(response)
+        response = sanitize_response(response)  # ← ДОБАВИТЬ
+        references = self._extract_references(response)
+        return {"response": response, "references": references}
+
     async def generate(self, message: str, context: str,
-                       selected_code: Optional[str] = None, analysis: str = "") -> dict:
-        """Генерирует код по запросу"""
+                       selected_code: Optional[str] = None, analysis: str = "",
+                       lang_instruction: str = "") -> dict:
         prompt = (
             "<|system|>\n"
             "You are an expert code generator. Write clean, well-documented, production-ready code.\n"
             "CRITICAL: Do NOT output <think> tags, reasoning chains, or internal thoughts. "
             "Output only the final code and brief explanation.\n\n"
+            f"{lang_instruction}\n\n"
             "Rules:\n"
             "1. Follow the coding style and conventions visible in the project context\n"
             "2. Include proper error handling\n"
@@ -58,13 +67,14 @@ class CoderAgent:
         return {"response": response, "code": code}
 
     async def inline_edit(self, code: str, instruction: str,
-                          line_start: int, line_end: int, context: str = "") -> dict:
-        """Inline-редактирование выбранного кода"""
+                          line_start: int, line_end: int, context: str = "",
+                          lang_instruction: str = "") -> dict:
         prompt = (
             "<|system|>\n"
             "You are a precise code editor. Apply the given instruction to the code.\n"
             "CRITICAL: Do NOT output <think> tags. Output ONLY the modified code, nothing else.\n"
             "Preserve indentation, style, and all unrelated functionality.\n"
+            f"{lang_instruction}\n"
             "<|end|>\n"
             "<|user|>\n"
             f"## Code (lines {line_start}-{line_end}):\n```\n{code}\n```\n\n"
@@ -79,13 +89,10 @@ class CoderAgent:
         return {"code": edited_code, "response": f"Applied edit: {instruction}"}
 
     def _extract_code(self, response: str) -> Optional[str]:
-        """Извлекает код из markdown code block"""
-        # Ищем ```lang\ncode\n```
         matches = re.findall(r'```(?:\w+)?\n(.*?)```', response, re.DOTALL)
         if matches:
             return matches[0].strip()
 
-        # Если ответ — чистый код
         lines = response.strip().split('\n')
         code_indicators = [
             'def ', 'class ', 'import ', 'from ', 'function ', 'const ',

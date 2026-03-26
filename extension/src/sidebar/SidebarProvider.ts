@@ -5,7 +5,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _serverUrl: string;
     private _pendingMessages: any[] = [];
-    private _ftStatusInterval?: NodeJS.Timeout;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -45,11 +44,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     await this._sendDownloadProgress(msg.modelId);
                     break;
                 case 'indexProject': vscode.commands.executeCommand('intelliCodeFabric.indexProject'); break;
-                case 'fineTune': await this._startFineTune(msg.modelId, msg.epochs, msg.strategies); break;
+                case 'fineTune':
+                    await this._startFineTune(msg.modelId, msg.epochs, msg.strategies, {
+                        learning_rate: msg.learning_rate,
+                        batch_size: msg.batch_size,
+                        gradient_accumulation_steps: msg.gradient_accumulation_steps,
+                        lora_r: msg.lora_r,
+                        lora_alpha: msg.lora_alpha,
+                        max_seq_length: msg.max_seq_length,
+                    });
+                    break;
                 case 'getFtStatus':
                     await this._sendFtStatus();
                     break;
-                case 'insertCode': this._insertCode(msg.code); break;
+                case 'insertCode': this._insertCode(msg.code, msg.targetFile); break;
             }
         });
 
@@ -73,6 +81,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const selectedCode = editor?.selection.isEmpty ? undefined : editor?.document.getText(editor.selection);
             const contextFile = editor?.document.fileName;
 
+            // Показываем статус "агент думает..."
+            this._view?.webview.postMessage({
+                type: 'status',
+                content: '🔍 Анализирую запрос и ищу контекст в проекте...',
+            });
+
             const response = await fetch(`${this._serverUrl}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -87,7 +101,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
-            // Передаём ВСЕ поля ответа, включая agent_trace
             this._view?.webview.postMessage({
                 type: 'chatResponse',
                 content: result.response,
@@ -95,8 +108,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 agent: result.agent,
                 intent: result.intent,
                 references: result.references,
-                agent_trace: result.agent_trace || [],   // ← новое поле
-                rag_chunks: result.rag_chunks || 0,      // ← кол-во найденных чанков
+                agent_trace: result.agent_trace || [],
+                rag_chunks: result.rag_chunks || 0,
+                thinking: result.thinking || '',
             });
         } catch (error: any) {
             this._view?.webview.postMessage({
@@ -145,7 +159,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private async _downloadModel(modelId: string) {
         try {
-            this._view?.webview.postMessage({ type: 'status', content: `Скачиваю ${modelId}… это может занять время.` });
+            this._view?.webview.postMessage({ type: 'status', content: `Скачиваю ${modelId}…` });
 
             const response = await fetch(`${this._serverUrl}/models/download`, {
                 method: 'POST',
@@ -162,7 +176,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    // ─── Custom Models ─────────────────────────────────────────
+    // ─── Custom Models (FIX: properly update status) ──────────
 
     private async _loadCustomModel(repo: string, name: string, quantization: string) {
         try {
@@ -177,10 +191,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
-            this._view?.webview.postMessage({ type: 'modelLoaded', modelId: result.model_id || name });
+            // FIX: Send modelLoaded with the correct model ID
+            this._view?.webview.postMessage({
+                type: 'modelLoaded',
+                modelId: result.model_id || name.toLowerCase().replace(/ /g, '-'),
+            });
+
+            // Refresh model list so custom model appears in picker
+            await this._sendModelList();
+
             vscode.window.showInformationMessage(`Своя модель ${name} загружена!`);
         } catch (error: any) {
-            this._view?.webview.postMessage({ type: 'error', content: `Ошибка загрузки своей модели: ${error.message}` });
+            this._view?.webview.postMessage({ type: 'error', content: `Ошибка загрузки: ${error.message}` });
         }
     }
 
@@ -195,9 +217,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             });
 
             if (!response.ok) throw new Error(await response.text());
-            this._view?.webview.postMessage({ type: 'modelLoaded', modelId: name });
-            vscode.window.showInformationMessage(`Своя модель ${name} скачана и загружена!`);
+            const result = (await response.json()) as any;
+
+            // FIX: Send modelLoaded with correct model ID
+            this._view?.webview.postMessage({
+                type: 'modelLoaded',
+                modelId: result.model_id || name.toLowerCase().replace(/ /g, '-'),
+            });
+
+            // Refresh model list
             await this._sendModelList();
+
+            vscode.window.showInformationMessage(`Своя модель ${name} скачана и загружена!`);
         } catch (error: any) {
             this._view?.webview.postMessage({ type: 'error', content: `Ошибка: ${error.message}` });
         }
@@ -213,26 +244,38 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch (_e) {}
     }
 
-    // ─── Fine-tune ─────────────────────────────────────────────
+    // ─── Fine-tune (with extended params) ──────────────────────
 
-    private async _startFineTune(modelId: string, epochs: number, strategies: string[]) {
+    private async _startFineTune(modelId: string, epochs: number,
+                                  strategies: string[], extraParams: any = {}) {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
             this._view?.webview.postMessage({ type: 'error', content: 'Нет открытой папки проекта' });
             return;
         }
         try {
+            const body: any = {
+                project_path: workspaceFolders[0].uri.fsPath,
+                model_id: modelId,
+                epochs,
+                strategies,
+            };
+
+            // Add extended params if provided
+            if (extraParams.learning_rate) body.learning_rate = extraParams.learning_rate;
+            if (extraParams.batch_size) body.batch_size = extraParams.batch_size;
+            if (extraParams.gradient_accumulation_steps) body.gradient_accumulation_steps = extraParams.gradient_accumulation_steps;
+            if (extraParams.lora_r) body.lora_r = extraParams.lora_r;
+            if (extraParams.lora_alpha) body.lora_alpha = extraParams.lora_alpha;
+            if (extraParams.max_seq_length) body.max_seq_length = extraParams.max_seq_length;
+
             const response = await fetch(`${this._serverUrl}/fine-tune`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    project_path: workspaceFolders[0].uri.fsPath,
-                    model_id: modelId,
-                    epochs,
-                    strategies,
-                }),
+                body: JSON.stringify(body),
             });
             if (!response.ok) throw new Error(await response.text());
+            // No error = background task started successfully
         } catch (error: any) {
             this._view?.webview.postMessage({ type: 'error', content: `Ошибка запуска дообучения: ${error.message}` });
         }
@@ -256,11 +299,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch (_e) {}
     }
 
-    // ─── Code ──────────────────────────────────────────────────
+    // ─── Code (improved: insert at selection or cursor) ───────
 
-    private _insertCode(code: string) {
+    private async _insertCode(code: string, targetFile?: string) {
+        // Если указан целевой файл — открываем его
+        if (targetFile) {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders) {
+                const fullPath = vscode.Uri.joinPath(workspaceFolders[0].uri, targetFile);
+                try {
+                    const doc = await vscode.workspace.openTextDocument(fullPath);
+                    const editor = await vscode.window.showTextDocument(doc, { 
+                        viewColumn: vscode.ViewColumn.One 
+                    });
+                    // Вставляем в конец файла
+                    const lastLine = doc.lineCount - 1;
+                    const lastChar = doc.lineAt(lastLine).text.length;
+                    editor.edit(eb => {
+                        eb.insert(new vscode.Position(lastLine, lastChar), '\n\n' + code);
+                    });
+                    return;
+                } catch {
+                    // Файл не найден — fallback к обычной вставке
+                }
+            }
+        }
+
+        // Fallback: вставка в активный редактор
         const editor = vscode.window.activeTextEditor;
-        if (!editor) return;
+        if (!editor) {
+            // Нет открытого редактора — открываем новый документ
+            const doc = await vscode.workspace.openTextDocument({ content: code });
+            await vscode.window.showTextDocument(doc);
+            return;
+        }
+        
         editor.edit(eb => {
             if (editor.selection.isEmpty) {
                 eb.insert(editor.selection.active, code);
