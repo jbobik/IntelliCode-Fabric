@@ -10,11 +10,9 @@
     const sendBtn = document.getElementById('sendBtn');
     const welcomeState = document.getElementById('welcomeState');
 
-    // Status
     const statusDot = document.getElementById('statusDot');
     const statusLabel = document.getElementById('statusLabel');
 
-    // Model panel
     const activeModelName = document.getElementById('activeModelName');
     const changeModelBtn = document.getElementById('changeModelBtn');
     const modelPicker = document.getElementById('modelPicker');
@@ -26,19 +24,17 @@
     const downloadProgressLabel = document.getElementById('downloadProgressLabel');
     const downloadProgressBar = document.getElementById('downloadProgressBar');
 
-    // Adapter
     const adapterBadgeRow = document.getElementById('adapterBadgeRow');
     const activeAdapterName = document.getElementById('activeAdapterName');
     const removeAdapterBtn = document.getElementById('removeAdapterBtn');
     const adapterSection = document.getElementById('adapterSection');
     const adapterList = document.getElementById('adapterList');
 
-    // Buttons
     const indexBtn = document.getElementById('indexBtn');
     const fineTuneBtn = document.getElementById('fineTuneBtn');
     const clearBtn = document.getElementById('clearBtn');
+    const codeReviewBtn = document.getElementById('codeReviewBtn');
 
-    // Fine-tune panel
     const finetunePanelEl = document.getElementById('finetunePanelEl');
     const closeFinetuneBtn = document.getElementById('closeFinetuneBtn');
     const ftModelSelect = document.getElementById('ftModelSelect');
@@ -50,6 +46,13 @@
     const ftStats = document.getElementById('ftStats');
     const ftResult = document.getElementById('ftResult');
 
+    const codeReviewPanel = document.getElementById('codeReviewPanel');
+    const closeReviewBtn = document.getElementById('closeReviewBtn');
+    const startReviewBtn = document.getElementById('startReviewBtn');
+
+    const agentTraceBar = document.getElementById('agentTraceBar');
+    const agentTraceText = document.getElementById('agentTraceText');
+
     // ── State ──
     let models = [];
     let adapters = [];
@@ -60,7 +63,7 @@
     let ftPolling = null;
     let downloadPolling = {};
 
-    // Restore
+    // Restore state
     const prev = vscode.getState() || {};
     conversationHistory = prev.conversationHistory || [];
     if (conversationHistory.length > 0) {
@@ -87,11 +90,11 @@
         pickerTiers.innerHTML = '';
         const tierOrder = ['ultralight', 'light', 'balanced', 'powerful', 'finetune-base'];
         const tierLabels = {
-            ultralight: '⚡ Ultra-light (CPU)',
-            light: '🟢 Light (3–4 GB)',
-            balanced: '🔵 Balanced (8 GB)',
-            powerful: '🔥 Powerful (16 GB)',
-            'finetune-base': '🏗️ Fine-tune Base Models',
+            ultralight: '⚡ Ультралёгкие (CPU)',
+            light: '🟢 Лёгкие (3–4 GB)',
+            balanced: '🔵 Сбалансированные (8 GB)',
+            powerful: '🔥 Мощные (16 GB)',
+            'finetune-base': '🏗️ Базовые для дообучения',
         };
 
         tierOrder.forEach(tier => {
@@ -108,8 +111,8 @@
                 opt.dataset.id = m.id;
 
                 const badges = [];
-                if (m.downloaded) badges.push('<span class="model-badge badge-downloaded">downloaded</span>');
-                if (m.active) badges.push('<span class="model-badge badge-active">active</span>');
+                if (m.downloaded) badges.push('<span class="model-badge badge-downloaded">скачана</span>');
+                if (m.active) badges.push('<span class="model-badge badge-active">активна</span>');
                 if (m.tier === 'finetune-base') badges.push('<span class="model-badge badge-base">base</span>');
 
                 opt.innerHTML = `
@@ -128,7 +131,6 @@
                     selectedModelId = m.id;
                     document.querySelectorAll('.model-option').forEach(el => el.classList.remove('selected'));
                     opt.classList.add('selected');
-                    // show adapters for this model
                     renderAdapterSection(m.id);
                 });
 
@@ -138,7 +140,6 @@
             pickerTiers.appendChild(tierDiv);
         });
 
-        // Pre-select current
         if (selectedModelId) {
             const el = pickerTiers.querySelector(`[data-id="${selectedModelId}"]`);
             if (el) el.classList.add('selected');
@@ -156,12 +157,11 @@
         adapterSection.style.display = 'block';
         adapterList.innerHTML = '';
 
-        // "None" option
         const noneOpt = document.createElement('div');
         noneOpt.className = 'adapter-option' + (!selectedAdapterId ? ' selected' : '');
         noneOpt.innerHTML = `
             <div class="model-option-radio" style="width:11px;height:11px"></div>
-            <span class="adapter-option-name">No adapter (base model)</span>
+            <span class="adapter-option-name">Без адаптера (базовая модель)</span>
         `;
         noneOpt.addEventListener('click', () => {
             selectedAdapterId = null;
@@ -176,7 +176,7 @@
             opt.innerHTML = `
                 <div class="model-option-radio" style="width:11px;height:11px"></div>
                 <span class="adapter-option-name" title="${a.project}">${a.id}</span>
-                <span class="adapter-option-meta">${a.examples} ex.</span>
+                <span class="adapter-option-meta">${a.examples} примеров</span>
             `;
             opt.addEventListener('click', () => {
                 selectedAdapterId = a.id;
@@ -188,26 +188,25 @@
     }
 
     loadSelectedBtn.addEventListener('click', () => {
-        if (!selectedModelId) { addSystemMsg('Please select a model'); return; }
+        if (!selectedModelId) { addSystemMsg('Выберите модель'); return; }
         modelPicker.style.display = 'none';
         const m = models.find(x => x.id === selectedModelId);
         const label = m ? m.name : selectedModelId;
-        addSystemMsg(`Loading ${label}…${selectedAdapterId ? ' + adapter ' + selectedAdapterId : ''}`);
-        setStatus('loading', 'Loading…');
+        addSystemMsg(`Загружаю ${label}…${selectedAdapterId ? ' + адаптер ' + selectedAdapterId : ''}`);
+        setStatus('loading', 'Загрузка…');
         vscode.postMessage({ type: 'loadModel', modelId: selectedModelId, adapterId: selectedAdapterId || null });
     });
 
     downloadSelectedBtn.addEventListener('click', () => {
-        if (!selectedModelId) { addSystemMsg('Please select a model'); return; }
+        if (!selectedModelId) { addSystemMsg('Выберите модель'); return; }
         const m = models.find(x => x.id === selectedModelId);
-        if (m && m.downloaded) { addSystemMsg('Model already downloaded'); return; }
-        addSystemMsg(`Downloading ${selectedModelId}…`);
+        if (m && m.downloaded) { addSystemMsg('Модель уже скачана'); return; }
+        addSystemMsg(`Скачиваю ${selectedModelId}…`);
         downloadProgressWrap.style.display = 'block';
         downloadProgressBar.style.width = '0%';
-        downloadProgressLabel.textContent = 'Starting download…';
+        downloadProgressLabel.textContent = 'Начинаю загрузку…';
         vscode.postMessage({ type: 'startDownload', modelId: selectedModelId });
 
-        // Poll progress
         if (downloadPolling[selectedModelId]) clearInterval(downloadPolling[selectedModelId]);
         downloadPolling[selectedModelId] = setInterval(() => {
             vscode.postMessage({ type: 'getDownloadProgress', modelId: selectedModelId });
@@ -217,12 +216,11 @@
     removeAdapterBtn.addEventListener('click', () => {
         selectedAdapterId = null;
         adapterBadgeRow.style.display = 'none';
-        addSystemMsg('Adapter removed. Reload model to use base weights.');
+        addSystemMsg('Адаптер убран. Перезагрузите модель для использования базовых весов.');
     });
 
-
     // ════════════════════════════════════════════
-    //  CUSTOM MODEL LOADING
+    //  CUSTOM MODEL
     // ════════════════════════════════════════════
 
     const customModelInput = document.getElementById('customModelInput');
@@ -233,35 +231,25 @@
 
     loadCustomModelBtn.addEventListener('click', () => {
         const repo = customModelInput.value.trim();
-        if (!repo) { addSystemMsg('Please enter a model path or HuggingFace repo ID'); return; }
+        if (!repo) { addSystemMsg('Введите путь или репозиторий модели'); return; }
         const name = customModelName.value.trim() || repo.split('/').pop();
         const quant = customModelQuant.value;
-        addSystemMsg(`Loading custom model: ${name}...`);
-        setStatus('loading', 'Loading...');
+        addSystemMsg(`Загружаю модель: ${name}...`);
+        setStatus('loading', 'Загрузка...');
         modelPicker.style.display = 'none';
-        vscode.postMessage({
-            type: 'loadCustomModel',
-            repo: repo,
-            name: name,
-            quantization: quant,
-        });
+        vscode.postMessage({ type: 'loadCustomModel', repo, name, quantization: quant });
     });
 
     downloadCustomModelBtn.addEventListener('click', () => {
         const repo = customModelInput.value.trim();
-        if (!repo) { addSystemMsg('Please enter a HuggingFace repo ID'); return; }
-        if (repo.startsWith('/') || repo.startsWith('C:') || repo.startsWith('~')) {
-            addSystemMsg('Local path detected — use Load instead of Download');
+        if (!repo) { addSystemMsg('Введите HuggingFace репозиторий'); return; }
+        if (repo.startsWith('/') || repo.match(/^[A-Z]:\\/)) {
+            addSystemMsg('Обнаружен локальный путь — используйте Загрузить вместо Скачать');
             return;
         }
         const name = customModelName.value.trim() || repo.split('/').pop();
-        addSystemMsg(`Downloading ${repo}... This may take a while.`);
-        vscode.postMessage({
-            type: 'downloadCustomModel',
-            repo: repo,
-            name: name,
-            quantization: customModelQuant.value,
-        });
+        addSystemMsg(`Скачиваю ${repo}... Это может занять время.`);
+        vscode.postMessage({ type: 'downloadCustomModel', repo, name, quantization: customModelQuant.value });
     });
 
     // ════════════════════════════════════════════
@@ -271,6 +259,7 @@
     fineTuneBtn.addEventListener('click', () => {
         const open = finetunePanelEl.style.display !== 'none';
         finetunePanelEl.style.display = open ? 'none' : 'block';
+        codeReviewPanel.style.display = 'none';
         if (!open) populateFtModelSelect();
     });
 
@@ -281,7 +270,7 @@
         models.forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.id;
-            opt.textContent = m.name + (m.downloaded ? '' : ' [not downloaded]');
+            opt.textContent = m.name + (m.downloaded ? '' : ' [не скачана]');
             opt.disabled = !m.downloaded;
             if (m.active) opt.selected = true;
             ftModelSelect.appendChild(opt);
@@ -293,22 +282,78 @@
         const epochs = parseInt(ftEpochs.value) || 3;
         const strategies = Array.from(document.querySelectorAll('.ft-check input:checked')).map(el => el.value);
 
-        if (!strategies.length) { addSystemMsg('Select at least one training strategy'); return; }
+        if (!strategies.length) { addSystemMsg('Выберите хотя бы одну стратегию обучения'); return; }
 
         ftProgress.style.display = 'block';
         ftResult.style.display = 'none';
-        ftProgressMsg.textContent = 'Submitting fine-tune job…';
+        ftProgressMsg.textContent = 'Отправляю задачу дообучения…';
         ftProgressBar.style.width = '0%';
         startFtBtn.disabled = true;
 
         vscode.postMessage({ type: 'fineTune', modelId, epochs, strategies });
 
-        // Poll status
         if (ftPolling) clearInterval(ftPolling);
         ftPolling = setInterval(() => {
             vscode.postMessage({ type: 'getFtStatus' });
         }, 2000);
     });
+
+    // ════════════════════════════════════════════
+    //  CODE REVIEW (новая фича)
+    // ════════════════════════════════════════════
+
+    codeReviewBtn.addEventListener('click', () => {
+        const open = codeReviewPanel.style.display !== 'none';
+        codeReviewPanel.style.display = open ? 'none' : 'block';
+        finetunePanelEl.style.display = 'none';
+    });
+
+    closeReviewBtn.addEventListener('click', () => { codeReviewPanel.style.display = 'none'; });
+
+    startReviewBtn.addEventListener('click', () => {
+        const focus = [];
+        if (document.getElementById('rv-security').checked) focus.push('безопасность и уязвимости');
+        if (document.getElementById('rv-perf').checked) focus.push('производительность и оптимизация');
+        if (document.getElementById('rv-style').checked) focus.push('стиль кода и конвенции');
+        if (document.getElementById('rv-bugs').checked) focus.push('баги и edge cases');
+        if (document.getElementById('rv-docs').checked) focus.push('документация и комментарии');
+
+        if (!focus.length) { addSystemMsg('Выберите хотя бы один аспект ревью'); return; }
+
+        const prompt = `Проведи детальное code review текущего файла. Сфокусируйся на: ${focus.join(', ')}. Для каждой проблемы укажи: файл, строку (если возможно), описание проблемы и конкретное предложение по исправлению.`;
+
+        codeReviewPanel.style.display = 'none';
+        welcomeState.style.display = 'none';
+        chatInput.value = prompt;
+        sendMessage();
+    });
+
+    // ════════════════════════════════════════════
+    //  AGENT TRACE
+    // ════════════════════════════════════════════
+
+    function showAgentTrace(trace, intent) {
+        if (!trace || !trace.length) {
+            agentTraceBar.style.display = 'none';
+            return;
+        }
+
+        const agentIcons = {
+            analyst: '🔍 Аналитик',
+            coder: '💻 Кодер',
+            refactor: '🔄 Рефактор',
+            tester: '🧪 Тестер',
+            multi: '🤝 Мультиагент',
+            filter: '🚫 Фильтр',
+        };
+
+        const steps = trace.map(a => agentIcons[a] || a).join(' → ');
+        agentTraceText.innerHTML = `<span style="color:var(--accent)">Агенты:</span> ${steps}`;
+        agentTraceBar.style.display = 'block';
+
+        // Скрываем через 10 секунд
+        setTimeout(() => { agentTraceBar.style.display = 'none'; }, 10000);
+    }
 
     // ════════════════════════════════════════════
     //  CHAT
@@ -331,7 +376,7 @@
     });
 
     indexBtn.addEventListener('click', () => {
-        addSystemMsg('Indexing project…');
+        addSystemMsg('Индексирую проект…');
         vscode.postMessage({ type: 'indexProject' });
     });
 
@@ -339,6 +384,7 @@
         conversationHistory = [];
         chatArea.querySelectorAll('.msg, .typing-indicator').forEach(el => el.remove());
         welcomeState.style.display = '';
+        agentTraceBar.style.display = 'none';
         saveState();
     });
 
@@ -375,16 +421,25 @@
         let html = '';
 
         if (extra.agent && role === 'assistant') {
-            const labels = { analyst: 'Analyst', coder: 'Coder', refactor: 'Refactor', tester: 'Tester', general: 'Assistant' };
-            html += `<div class="agent-tag agent-${extra.agent}">${labels[extra.agent] || extra.agent}</div>`;
+            const labels = {
+                analyst: '🔍 Аналитик',
+                coder: '💻 Кодер',
+                refactor: '🔄 Рефактор',
+                tester: '🧪 Тестер',
+                general: '🤖 Ассистент',
+                multi: '🤝 Мультиагент',
+                filter: '🚫 Фильтр',
+            };
+            const agentClass = extra.agent === 'filter' ? 'agent-general' : `agent-${extra.agent}`;
+            html += `<div class="agent-tag ${agentClass}">${labels[extra.agent] || extra.agent}</div>`;
         }
 
         html += renderMarkdown(content);
 
         if (extra.code) {
             html += `<div class="code-actions">
-                <button class="code-action-btn primary-action insert-btn">↳ Insert</button>
-                <button class="code-action-btn copy-btn">Copy</button>
+                <button class="code-action-btn primary-action insert-btn">↳ Вставить</button>
+                <button class="code-action-btn copy-btn">Копировать</button>
             </div>`;
             bubble.setAttribute('data-code', extra.code);
         }
@@ -400,19 +455,18 @@
         bubble.querySelectorAll('pre').forEach(pre => {
             const btn = document.createElement('button');
             btn.className = 'copy-code-btn';
-            btn.textContent = 'Copy';
+            btn.textContent = 'Копировать';
             btn.addEventListener('click', () => {
                 const code = pre.querySelector('code');
                 navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
-                    btn.textContent = 'Copied!';
-                    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+                    btn.textContent = 'Скопировано!';
+                    setTimeout(() => { btn.textContent = 'Копировать'; }, 2000);
                 });
             });
             pre.style.position = 'relative';
             pre.appendChild(btn);
         });
 
-        // Insert / copy code buttons
         const insertBtn = bubble.querySelector('.insert-btn');
         if (insertBtn) {
             insertBtn.addEventListener('click', () => {
@@ -423,8 +477,8 @@
         if (copyBtn2) {
             copyBtn2.addEventListener('click', () => {
                 navigator.clipboard.writeText(bubble.getAttribute('data-code')).then(() => {
-                    copyBtn2.textContent = 'Copied!';
-                    setTimeout(() => { copyBtn2.textContent = 'Copy'; }, 2000);
+                    copyBtn2.textContent = 'Скопировано!';
+                    setTimeout(() => { copyBtn2.textContent = 'Копировать'; }, 2000);
                 });
             });
         }
@@ -487,7 +541,6 @@
     }
 
     function processInline(text) {
-        // inline code
         const parts = text.split('`');
         let out = '';
         parts.forEach((p, i) => { out += i % 2 === 1 ? `<code>${p}</code>` : p; });
@@ -510,13 +563,11 @@
         return d.innerHTML;
     }
 
-    // ── Status ──
     function setStatus(state, label) {
         statusDot.className = 'status-dot' + (state === 'online' ? ' online' : state === 'loading' ? ' loading' : '');
         statusLabel.textContent = label;
     }
 
-    // ── Helpers ──
     function saveState() {
         vscode.setState({ conversationHistory: conversationHistory.slice(-50) });
     }
@@ -534,8 +585,15 @@
                 removeTyping();
                 isLoading = false;
                 sendBtn.disabled = false;
+                // Показываем трейс агентов
+                if (msg.agent_trace) {
+                    showAgentTrace(msg.agent_trace, msg.intent);
+                }
                 addMessage('assistant', msg.content, {
-                    agent: msg.agent, code: msg.code, references: msg.references
+                    agent: msg.agent,
+                    code: msg.code,
+                    references: msg.references,
+                    agent_trace: msg.agent_trace,
                 });
                 break;
 
@@ -556,23 +614,21 @@
                 if (active) {
                     selectedModelId = active.id;
                     activeModelName.textContent = active.name;
-                    setStatus('online', 'ready');
+                    setStatus('online', 'готов');
                 } else {
-                    setStatus('', 'no model');
-                    activeModelName.textContent = 'None loaded';
+                    setStatus('', 'нет модели');
+                    activeModelName.textContent = 'Не загружена';
                 }
-                // Update ft model select if open
                 if (finetunePanelEl.style.display !== 'none') populateFtModelSelect();
-                // Update download progress
                 models.forEach(m => {
                     if (m.download_progress != null) {
                         downloadProgressBar.style.width = m.download_progress + '%';
-                        downloadProgressLabel.textContent = `Downloading… ${m.download_progress}%`;
+                        downloadProgressLabel.textContent = `Скачивание… ${m.download_progress}%`;
                         if (m.download_progress >= 100 && downloadPolling[m.id]) {
                             clearInterval(downloadPolling[m.id]);
                             delete downloadPolling[m.id];
                             downloadProgressWrap.style.display = 'none';
-                            addSystemMsg(`✅ ${m.name} downloaded! Click Load to activate.`);
+                            addSystemMsg(`✅ ${m.name} скачана! Нажмите Загрузить для активации.`);
                         }
                     }
                 });
@@ -586,7 +642,7 @@
                 selectedModelId = msg.modelId;
                 const loadedModel = models.find(m => m.id === msg.modelId);
                 activeModelName.textContent = loadedModel ? loadedModel.name : msg.modelId;
-                setStatus('online', 'ready');
+                setStatus('online', 'готов');
                 if (msg.adapterId) {
                     adapterBadgeRow.style.display = 'flex';
                     activeAdapterName.textContent = msg.adapterId;
@@ -595,12 +651,12 @@
                     adapterBadgeRow.style.display = 'none';
                     selectedAdapterId = null;
                 }
-                addSystemMsg(`✅ ${loadedModel ? loadedModel.name : msg.modelId} loaded${msg.adapterId ? ' + adapter' : ''}!`);
+                addSystemMsg(`✅ ${loadedModel ? loadedModel.name : msg.modelId} загружена${msg.adapterId ? ' + адаптер' : ''}!`);
                 vscode.postMessage({ type: 'getModels' });
                 break;
 
             case 'modelDownloaded':
-                addSystemMsg(`✅ ${msg.modelId} downloaded! Now click Load.`);
+                addSystemMsg(`✅ ${msg.modelId} скачана! Нажмите Загрузить.`);
                 vscode.postMessage({ type: 'getModels' });
                 break;
 
@@ -611,11 +667,11 @@
                     ftProgressBar.style.width = s.progress + '%';
                     if (s.examples_count) {
                         const bd = s.strategy_breakdown || {};
-                        ftStats.textContent = `${s.examples_count} examples | ` +
+                        ftStats.textContent = `${s.examples_count} примеров | ` +
                             Object.entries(bd).map(([k,v]) => `${k}: ${v}`).join(', ');
                     }
                     if (s.epoch > 0) {
-                        ftProgressMsg.textContent = `Epoch ${s.epoch}/${s.total_epochs} — Loss: ${s.loss}`;
+                        ftProgressMsg.textContent = `Эпоха ${s.epoch}/${s.total_epochs} — Loss: ${s.loss}`;
                     }
                 } else {
                     if (ftPolling) { clearInterval(ftPolling); ftPolling = null; }
@@ -623,9 +679,9 @@
                     if (s.adapter_path) {
                         ftProgressBar.style.width = '100%';
                         ftResult.style.display = 'block';
-                        ftResult.innerHTML = `✅ Fine-tuning complete!<br>Adapter: <strong>${s.adapter_path}</strong><br>Examples: ${s.examples_count}`;
+                        ftResult.innerHTML = `✅ Дообучение завершено!<br>Адаптер: <strong>${s.adapter_path}</strong><br>Примеров: ${s.examples_count}`;
                         vscode.postMessage({ type: 'getAdapters' });
-                        addSystemMsg('🎯 Fine-tuning complete! Load the model with the new adapter.');
+                        addSystemMsg('🎯 Дообучение завершено! Загрузите модель с новым адаптером.');
                     } else if (s.message && s.message.includes('Error')) {
                         ftResult.style.display = 'block';
                         ftResult.style.background = 'rgba(248,81,73,0.08)';
@@ -650,13 +706,13 @@
 
             case 'explain':
                 if (welcomeState) welcomeState.style.display = 'none';
-                chatInput.value = 'Explain this code in detail';
+                chatInput.value = 'Объясни этот код подробно: что он делает, как работает и какие есть потенциальные проблемы';
                 sendMessage();
                 break;
         }
     });
 
-    // Health poll
+    // Health poll every 30s
     setInterval(() => { vscode.postMessage({ type: 'getModels' }); }, 30000);
 
 })();

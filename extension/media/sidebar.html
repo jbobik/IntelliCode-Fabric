@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,7 +19,7 @@
             <span class="status-dot" id="statusDot"></span>
             <span id="statusLabel">offline</span>
         </div>
-        <button class="icon-btn" id="settingsToggle" title="Settings">⚙</button>
+        <button class="icon-btn" id="settingsToggle" title="Настройки">⚙</button>
     </div>
 </div>
 
@@ -29,23 +29,23 @@
     <!-- Active model display -->
     <div class="active-model-row" id="activeModelRow">
         <div class="active-model-info">
-            <span class="active-model-label">Model</span>
-            <span class="active-model-name" id="activeModelName">None loaded</span>
+            <span class="active-model-label">Модель</span>
+            <span class="active-model-name" id="activeModelName">Не загружена</span>
         </div>
-        <button class="pill-btn" id="changeModelBtn">Change ▾</button>
+        <button class="pill-btn" id="changeModelBtn">Выбрать ▾</button>
     </div>
 
     <!-- Adapter badge (shown when fine-tuned adapter active) -->
     <div class="adapter-badge-row" id="adapterBadgeRow" style="display:none">
-        <span class="adapter-tag">🎯 Fine-tuned:</span>
+        <span class="adapter-tag">🎯 Дообучена:</span>
         <span class="adapter-name" id="activeAdapterName">–</span>
-        <button class="adapter-remove" id="removeAdapterBtn" title="Remove adapter">✕</button>
+        <button class="adapter-remove" id="removeAdapterBtn" title="Убрать адаптер">✕</button>
     </div>
 
     <!-- Model picker dropdown (hidden by default) -->
     <div class="model-picker" id="modelPicker" style="display:none">
         <div class="picker-header">
-            <span>Select Model</span>
+            <span>Выбор модели</span>
             <button class="icon-btn" id="closePickerBtn">✕</button>
         </div>
 
@@ -56,20 +56,20 @@
         <!-- Adapter selector -->
         <div class="adapter-section" id="adapterSection" style="display:none">
             <div class="adapter-section-title">
-                🎯 Fine-tuned Adapters
-                <span class="hint">(optional)</span>
+                🎯 Дообученные адаптеры
+                <span class="hint">(необязательно)</span>
             </div>
             <div class="adapter-list" id="adapterList"></div>
         </div>
 
         <div class="picker-actions">
-            <button class="action-btn primary" id="loadSelectedBtn">▶ Load</button>
-            <button class="action-btn secondary" id="downloadSelectedBtn">⬇ Download</button>
+            <button class="action-btn primary" id="loadSelectedBtn">▶ Загрузить</button>
+            <button class="action-btn secondary" id="downloadSelectedBtn">⬇ Скачать</button>
         </div>
 
         <!-- Download progress -->
         <div class="download-progress-wrap" id="downloadProgressWrap" style="display:none">
-            <div class="download-progress-label" id="downloadProgressLabel">Downloading…</div>
+            <div class="download-progress-label" id="downloadProgressLabel">Загрузка…</div>
             <div class="progress-bar-track">
                 <div class="progress-bar-fill" id="downloadProgressBar" style="width:0%"></div>
             </div>
@@ -78,31 +78,26 @@
         <!-- Custom model loader -->
         <div class="custom-model-section">
             <div class="picker-header">
-                <span>Load Custom Model</span>
+                <span>Своя модель</span>
             </div>
             <div style="padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;">
-                <label class="ft-label">HuggingFace repo or local path</label>
+                <label class="ft-label">HuggingFace репозиторий или локальный путь</label>
                 <input class="ft-select" type="text" id="customModelInput"
-                       placeholder="e.g. Qwen/Qwen2.5-Coder-3B-Instruct or C:\models\my-model">
+                       placeholder="напр. Qwen/Qwen2.5-Coder-3B-Instruct">
 
-                <label class="ft-label">Display name <span class="hint">(optional)</span></label>
-                <input class="ft-select" type="text" id="customModelName" placeholder="My Custom Model">
+                <label class="ft-label">Отображаемое имя <span class="hint">(необязательно)</span></label>
+                <input class="ft-select" type="text" id="customModelName" placeholder="Моя модель">
 
-                <label class="ft-label">Quantization</label>
+                <label class="ft-label">Квантование</label>
                 <select class="ft-select" id="customModelQuant">
-                    <option value="4bit">4-bit (recommended, saves RAM)</option>
+                    <option value="4bit">4-bit (рекомендуется, экономит память)</option>
                     <option value="8bit">8-bit</option>
-                    <option value="none">None (full precision)</option>
+                    <option value="none">Без квантования (полная точность)</option>
                 </select>
 
                 <div style="display:flex; gap:6px;">
-                    <button class="action-btn primary" id="loadCustomModelBtn" style="flex:1">▶ Load</button>
-                    <button class="action-btn secondary" id="downloadCustomModelBtn" style="flex:1">⬇ Download & Load</button>
-                </div>
-
-                <div class="ft-label hint" style="text-transform:none; letter-spacing:0; font-weight:400; line-height: 1.4;">
-                    💡 Enter any HuggingFace model ID to download, or a local path to a model/adapter folder.
-                    Fine-tuned adapters from the 🎯 Fine-tune panel appear automatically.
+                    <button class="action-btn primary" id="loadCustomModelBtn" style="flex:1">▶ Загрузить</button>
+                    <button class="action-btn secondary" id="downloadCustomModelBtn" style="flex:1">⬇ Скачать и загрузить</button>
                 </div>
             </div>
         </div>
@@ -111,49 +106,72 @@
 
     <!-- Quick action row -->
     <div class="quick-header-row">
-        <button class="icon-text-btn" id="indexBtn" title="Index project">📁 Index</button>
-        <button class="icon-text-btn" id="fineTuneBtn" title="Fine-tune on project">🎯 Fine-tune</button>
-        <button class="icon-text-btn" id="clearBtn" title="Clear chat">🗑 Clear</button>
+        <button class="icon-text-btn" id="indexBtn" title="Индексировать проект">📁 Индекс</button>
+        <button class="icon-text-btn" id="fineTuneBtn" title="Дообучить на проекте">🎯 Fine-tune</button>
+        <button class="icon-text-btn" id="codeReviewBtn" title="Ревью текущего файла">🔍 Ревью</button>
+        <button class="icon-text-btn" id="clearBtn" title="Очистить чат">🗑 Очистить</button>
     </div>
 </div>
 
 <!-- ══════════════ FINE-TUNE PANEL ══════════════ -->
 <div class="finetune-panel" id="finetunePanelEl" style="display:none">
     <div class="panel-header">
-        <span>Fine-tune on Project</span>
+        <span>Дообучение на проекте</span>
         <button class="icon-btn" id="closeFinetuneBtn">✕</button>
     </div>
 
     <div class="ft-form">
-        <label class="ft-label">Base model for fine-tuning</label>
+        <label class="ft-label">Базовая модель</label>
         <select class="ft-select" id="ftModelSelect"></select>
 
-        <label class="ft-label">Epochs <span class="hint">(2-5 recommended)</span></label>
+        <label class="ft-label">Эпохи <span class="hint">(рекомендуется 2–5)</span></label>
         <input class="ft-input" type="number" id="ftEpochs" value="3" min="1" max="1000">
 
-        <label class="ft-label">Training strategies</label>
+        <label class="ft-label">Стратегии обучения</label>
         <div class="ft-strategies" id="ftStrategies">
-            <label class="ft-check"><input type="checkbox" value="docstring_to_impl" checked> Docstring → Implementation</label>
-            <label class="ft-check"><input type="checkbox" value="comment_to_code" checked> Comment → Code</label>
-            <label class="ft-check"><input type="checkbox" value="file_completion" checked> File completion</label>
-            <label class="ft-check"><input type="checkbox" value="function_signature" checked> Signature → Body</label>
-            <label class="ft-check"><input type="checkbox" value="test_to_impl"> Test → Implementation</label>
+            <label class="ft-check"><input type="checkbox" value="docstring_to_impl" checked> Docstring → Реализация</label>
+            <label class="ft-check"><input type="checkbox" value="comment_to_code" checked> Комментарий → Код</label>
+            <label class="ft-check"><input type="checkbox" value="file_completion" checked> Дополнение файла</label>
+            <label class="ft-check"><input type="checkbox" value="function_signature" checked> Сигнатура → Тело</label>
+            <label class="ft-check"><input type="checkbox" value="test_to_impl"> Тест → Реализация</label>
         </div>
 
-        <button class="action-btn primary full-width" id="startFtBtn">🚀 Start Fine-tuning</button>
+        <button class="action-btn primary full-width" id="startFtBtn">🚀 Запустить дообучение</button>
     </div>
 
-    <!-- Progress -->
     <div class="ft-progress" id="ftProgress" style="display:none">
-        <div class="ft-progress-msg" id="ftProgressMsg">Preparing...</div>
+        <div class="ft-progress-msg" id="ftProgressMsg">Подготовка...</div>
         <div class="progress-bar-track">
             <div class="progress-bar-fill animated" id="ftProgressBar" style="width:0%"></div>
         </div>
         <div class="ft-stats" id="ftStats"></div>
     </div>
 
-    <!-- Results -->
     <div class="ft-result" id="ftResult" style="display:none"></div>
+</div>
+
+<!-- ══════════════ CODE REVIEW PANEL ══════════════ -->
+<div class="finetune-panel" id="codeReviewPanel" style="display:none">
+    <div class="panel-header">
+        <span>🔍 Code Review</span>
+        <button class="icon-btn" id="closeReviewBtn">✕</button>
+    </div>
+    <div style="padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;">
+        <div class="ft-label">Фокус ревью</div>
+        <div class="ft-strategies">
+            <label class="ft-check"><input type="checkbox" id="rv-security" checked> 🔒 Безопасность</label>
+            <label class="ft-check"><input type="checkbox" id="rv-perf" checked> ⚡ Производительность</label>
+            <label class="ft-check"><input type="checkbox" id="rv-style" checked> 🎨 Стиль кода</label>
+            <label class="ft-check"><input type="checkbox" id="rv-bugs" checked> 🐛 Баги и edge cases</label>
+            <label class="ft-check"><input type="checkbox" id="rv-docs"> 📝 Документация</label>
+        </div>
+        <button class="action-btn primary full-width" id="startReviewBtn">🔍 Начать ревью</button>
+    </div>
+</div>
+
+<!-- ══════════════ AGENT TRACE PANEL ══════════════ -->
+<div id="agentTraceBar" style="display:none; padding: 4px 10px; background: rgba(88,166,255,0.06); border-bottom: 1px solid rgba(88,166,255,0.15); font-size: 10px; color: var(--text-muted);">
+    <span id="agentTraceText"></span>
 </div>
 
 <!-- ══════════════ CHAT ══════════════ -->
@@ -161,29 +179,31 @@
     <div class="welcome-state" id="welcomeState">
         <div class="welcome-glyph">⬡</div>
         <h3>IntelliCode Fabric</h3>
-        <p>Your fully-local AI dev assistant. No API keys. No subscriptions. Your code never leaves your machine.</p>
+        <p>Полностью локальный AI-партнёр по разработке. Без API-ключей. Без подписок. Ваш код никогда не покидает машину.</p>
         <div class="welcome-steps">
-            <div class="step"><span class="step-num">1</span><span>Start backend: <code>cd backend && python server.py</code></span></div>
-            <div class="step"><span class="step-num">2</span><span>Select a model and click <strong>Load</strong></span></div>
-            <div class="step"><span class="step-num">3</span><span>Click <strong>📁 Index</strong> to scan your project</span></div>
-            <div class="step"><span class="step-num">4</span><span>Ask anything about your code!</span></div>
+            <div class="step"><span class="step-num">1</span><span>Запустите бэкенд: <code>cd backend && python server.py</code></span></div>
+            <div class="step"><span class="step-num">2</span><span>Выберите модель и нажмите <strong>Загрузить</strong></span></div>
+            <div class="step"><span class="step-num">3</span><span>Нажмите <strong>📁 Индекс</strong> для сканирования проекта</span></div>
+            <div class="step"><span class="step-num">4</span><span>Задайте вопрос о вашем коде!</span></div>
         </div>
     </div>
-    <!-- messages injected here -->
 </div>
 
 <!-- ══════════════ INPUT AREA ══════════════ -->
 <div class="input-area">
+    <!-- Качественные русские промты -->
     <div class="quick-prompts" id="quickPrompts">
-        <button class="qp-chip" data-prompt="Where is authentication implemented in this project?">🔐 Find auth</button>
-        <button class="qp-chip" data-prompt="Explain the overall architecture of this project">📐 Architecture</button>
-        <button class="qp-chip" data-prompt="Find potential bugs and security issues">🐛 Find bugs</button>
-        <button class="qp-chip" data-prompt="List all API endpoints in this project">🌐 API routes</button>
-        <button class="qp-chip" data-prompt="Suggest refactoring improvements for better code quality">✨ Improve</button>
+        <button class="qp-chip" data-prompt="Где в этом проекте реализована аутентификация и авторизация? Покажи все связанные файлы и логику.">🔐 Аутентификация</button>
+        <button class="qp-chip" data-prompt="Опиши архитектуру проекта: основные модули, их взаимодействие и потоки данных.">🏗️ Архитектура</button>
+        <button class="qp-chip" data-prompt="Найди потенциальные баги, уязвимости безопасности и проблемные места в коде. Объясни каждую проблему.">🐛 Найти баги</button>
+        <button class="qp-chip" data-prompt="Перечисли все API-эндпоинты проекта: метод, путь, параметры и что они делают.">🌐 API эндпоинты</button>
+        <button class="qp-chip" data-prompt="Что можно улучшить в этом коде? Предложи конкретные рефакторинги с объяснением пользы.">✨ Предложить улучшения</button>
+        <button class="qp-chip" data-prompt="Объясни поток выполнения запроса от пользователя до базы данных и обратно.">🔄 Поток данных</button>
+        <button class="qp-chip" data-prompt="Какие зависимости использует проект? Есть ли устаревшие или проблемные пакеты?">📦 Зависимости</button>
     </div>
     <div class="input-row">
         <textarea class="chat-input" id="chatInput"
-            placeholder="Ask about your code… (Enter to send)"
+            placeholder="Спросите о коде… (Enter — отправить, Shift+Enter — новая строка)"
             rows="1"></textarea>
         <button class="send-btn" id="sendBtn">
             <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">

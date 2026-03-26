@@ -313,7 +313,6 @@ fine_tuning:
 ```
 ---
 
-### 📊 Сравнение с аналогами
 ## 📊 Сравнение с аналогами
 
 | Критерий | **IntelliCode Fabric** | Cursor | GitHub Copilot | Cody | Continue.dev |

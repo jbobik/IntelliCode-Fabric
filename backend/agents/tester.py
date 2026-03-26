@@ -8,6 +8,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _strip_think(text: str) -> str:
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"</?think>", "", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 class TesterAgent:
     def __init__(self, llm):
         self.llm = llm
@@ -22,6 +28,7 @@ class TesterAgent:
         prompt = (
             "<|system|>\n"
             f"You are an expert test engineer. Generate comprehensive tests using {framework}.\n"
+            "CRITICAL: Do NOT output <think> tags or internal reasoning. Output only the final tests.\n\n"
             "Rules:\n"
             "1. Cover all public functions/methods\n"
             "2. Include edge cases, error cases, and boundary conditions\n"
@@ -40,6 +47,7 @@ class TesterAgent:
         prompt += f"## Instructions: {test_instruction}\n## Framework: {framework}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
+        response = _strip_think(response)
 
         code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', response, re.DOTALL)
         test_code = code_blocks[0].strip() if code_blocks else None
@@ -60,12 +68,10 @@ class TesterAgent:
             "go": ["func ", "package ", "fmt.", "err != nil"],
             "rust": ["fn ", "let mut", "impl ", "pub fn"],
         }
-
         scores = {}
         code_lower = code.lower()
         for lang, keywords in indicators.items():
             scores[lang] = sum(1 for kw in keywords if kw.lower() in code_lower)
-
         if not scores or max(scores.values()) == 0:
             return "python"
         return max(scores, key=scores.get)

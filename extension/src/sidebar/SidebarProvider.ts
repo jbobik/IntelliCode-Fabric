@@ -65,7 +65,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    // ─── Chat ─────────────────────────────────────────────────
+    // ─── Chat ─────────────────────────────────────────────────────────────────
 
     private async _handleChat(message: any) {
         try {
@@ -87,6 +87,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
+            // Передаём ВСЕ поля ответа, включая agent_trace
             this._view?.webview.postMessage({
                 type: 'chatResponse',
                 content: result.response,
@@ -94,11 +95,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 agent: result.agent,
                 intent: result.intent,
                 references: result.references,
+                agent_trace: result.agent_trace || [],   // ← новое поле
+                rag_chunks: result.rag_chunks || 0,      // ← кол-во найденных чанков
             });
         } catch (error: any) {
             this._view?.webview.postMessage({
                 type: 'error',
-                content: `${error.message}. Is the backend running? (cd backend && python server.py)`,
+                content: `${error.message}. Запущен ли бэкенд? (cd backend && python server.py)`,
             });
         }
     }
@@ -114,14 +117,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch {
             this._view?.webview.postMessage({
                 type: 'error',
-                content: 'Cannot connect to backend. Run : cd backend && python server.py',
+                content: 'Нет подключения к бэкенду. Запустите: cd backend && python server.py',
             });
         }
     }
 
     private async _loadModel(modelId: string, adapterId?: string) {
         try {
-            this._view?.webview.postMessage({ type: 'status', content: `Loading ${modelId}…` });
+            this._view?.webview.postMessage({ type: 'status', content: `Загружаю ${modelId}…` });
 
             const response = await fetch(`${this._serverUrl}/models/select`, {
                 method: 'POST',
@@ -133,16 +136,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             this._view?.webview.postMessage({ type: 'modelLoaded', modelId, adapterId });
             vscode.window.showInformationMessage(
-                `AI Code Partner: ${modelId} loaded${adapterId ? ' + adapter' : ''}!`
+                `IntelliCode Fabric: ${modelId} загружена${adapterId ? ' + адаптер' : ''}!`
             );
         } catch (error: any) {
-            this._view?.webview.postMessage({ type: 'error', content: `Load failed: ${error.message}` });
+            this._view?.webview.postMessage({ type: 'error', content: `Ошибка загрузки: ${error.message}` });
         }
     }
 
     private async _downloadModel(modelId: string) {
         try {
-            this._view?.webview.postMessage({ type: 'status', content: `Downloading ${modelId}… this may take a while.` });
+            this._view?.webview.postMessage({ type: 'status', content: `Скачиваю ${modelId}… это может занять время.` });
 
             const response = await fetch(`${this._serverUrl}/models/download`, {
                 method: 'POST',
@@ -152,10 +155,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             if (!response.ok) throw new Error(await response.text());
             this._view?.webview.postMessage({ type: 'modelDownloaded', modelId });
-            vscode.window.showInformationMessage(`Model ${modelId} downloaded!`);
+            vscode.window.showInformationMessage(`Модель ${modelId} скачана!`);
             await this._sendModelList();
         } catch (error: any) {
-            this._view?.webview.postMessage({ type: 'error', content: `Download failed: ${error.message}` });
+            this._view?.webview.postMessage({ type: 'error', content: `Ошибка скачивания: ${error.message}` });
         }
     }
 
@@ -163,10 +166,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     private async _loadCustomModel(repo: string, name: string, quantization: string) {
         try {
-            this._view?.webview.postMessage({
-                type: 'status',
-                content: `Loading ${name}...`,
-            });
+            this._view?.webview.postMessage({ type: 'status', content: `Загружаю ${name}...` });
 
             const response = await fetch(`${this._serverUrl}/models/load-custom`, {
                 method: 'POST',
@@ -174,32 +174,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 body: JSON.stringify({ repo, name, quantization }),
             });
 
-            if (!response.ok) {
-                throw new Error(await response.text());
-            }
-
+            if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
-            this._view?.webview.postMessage({
-                type: 'modelLoaded',
-                modelId: result.model_id || name,
-            });
-
-            vscode.window.showInformationMessage(`Custom model ${name} loaded!`);
+            this._view?.webview.postMessage({ type: 'modelLoaded', modelId: result.model_id || name });
+            vscode.window.showInformationMessage(`Своя модель ${name} загружена!`);
         } catch (error: any) {
-            this._view?.webview.postMessage({
-                type: 'error',
-                content: `Failed to load custom model: ${error.message}`,
-            });
+            this._view?.webview.postMessage({ type: 'error', content: `Ошибка загрузки своей модели: ${error.message}` });
         }
     }
 
     private async _downloadCustomModel(repo: string, name: string, quantization: string) {
         try {
-            this._view?.webview.postMessage({
-                type: 'status',
-                content: `Downloading ${repo}...`,
-            });
+            this._view?.webview.postMessage({ type: 'status', content: `Скачиваю ${repo}...` });
 
             const response = await fetch(`${this._serverUrl}/models/download-custom`, {
                 method: 'POST',
@@ -207,22 +194,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 body: JSON.stringify({ repo, name, quantization }),
             });
 
-            if (!response.ok) {
-                throw new Error(await response.text());
-            }
-
-            this._view?.webview.postMessage({
-                type: 'modelLoaded',
-                modelId: name,
-            });
-
-            vscode.window.showInformationMessage(`Custom model ${name} downloaded and loaded!`);
+            if (!response.ok) throw new Error(await response.text());
+            this._view?.webview.postMessage({ type: 'modelLoaded', modelId: name });
+            vscode.window.showInformationMessage(`Своя модель ${name} скачана и загружена!`);
             await this._sendModelList();
         } catch (error: any) {
-            this._view?.webview.postMessage({
-                type: 'error',
-                content: `Failed: ${error.message}`,
-            });
+            this._view?.webview.postMessage({ type: 'error', content: `Ошибка: ${error.message}` });
         }
     }
 
@@ -232,10 +209,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         try {
             const response = await fetch(`${this._serverUrl}/adapters`);
             const data = await response.json();
-            this._view?.webview.postMessage({
-                type: 'adapterList',
-                ...(data as any),
-            });
+            this._view?.webview.postMessage({ type: 'adapterList', ...(data as any) });
         } catch (_e) {}
     }
 
@@ -244,10 +218,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private async _startFineTune(modelId: string, epochs: number, strategies: string[]) {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
-            this._view?.webview.postMessage({ type: 'error', content: 'No workspace folder open' });
+            this._view?.webview.postMessage({ type: 'error', content: 'Нет открытой папки проекта' });
             return;
         }
-
         try {
             const response = await fetch(`${this._serverUrl}/fine-tune`, {
                 method: 'POST',
@@ -259,10 +232,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     strategies,
                 }),
             });
-
             if (!response.ok) throw new Error(await response.text());
         } catch (error: any) {
-            this._view?.webview.postMessage({ type: 'error', content: `Fine-tune start failed: ${error.message}` });
+            this._view?.webview.postMessage({ type: 'error', content: `Ошибка запуска дообучения: ${error.message}` });
         }
     }
 
@@ -270,10 +242,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         try {
             const response = await fetch(`${this._serverUrl}/fine-tune/status`);
             const data = await response.json();
-            this._view?.webview.postMessage({
-                type: 'ftStatus',
-                status: data as any,
-            });
+            this._view?.webview.postMessage({ type: 'ftStatus', status: data as any });
         } catch (_e) {}
     }
 
@@ -283,11 +252,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         try {
             const response = await fetch(`${this._serverUrl}/models/download-progress/${modelId}`);
             const data = await response.json();
-            this._view?.webview.postMessage({
-                type: 'downloadProgress',
-                modelId,
-                ...(data as any),
-            });
+            this._view?.webview.postMessage({ type: 'downloadProgress', modelId, ...(data as any) });
         } catch (_e) {}
     }
 
@@ -312,13 +277,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'sidebar.js'));
         const nonce = this._nonce();
 
-        // Read template and replace placeholders
         return require('fs').readFileSync(
             require('path').join(__dirname, '..', 'media', 'sidebar.html'), 'utf8'
         )
             .replace('{{styleUri}}', styleUri.toString())
             .replace('{{scriptUri}}', scriptUri.toString())
-            // Add nonce to script tag
             .replace('<script src="{{scriptUri}}"></script>',
                 `<script nonce="${nonce}" src="${scriptUri}"></script>`);
     }
