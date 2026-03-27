@@ -142,6 +142,40 @@ def strip_tool_calls(text: str) -> str:
     return text.strip()
 
 
+def _clean_react_response(text: str) -> str:
+    """
+    Clean up the final ReAct response:
+    - Remove leaked tool result blocks (### Tool Result ...)
+    - Remove line-numbered file content that leaked from read_file output (outside code blocks)
+    - Remove continuation prompts
+    """
+    # Remove tool result blocks: "### Tool Result (tool_name):\n...content..." up to next heading or end
+    text = re.sub(r'### Tool Result \([^)]*\):\n.*?(?=\n##|\n\*\*|\Z)', '', text, flags=re.DOTALL)
+
+    # Remove lines that look like read_file output OUTSIDE of code blocks:
+    # Pattern: "   42 | code here" — only standalone (not in ``` blocks)
+    # Split by code blocks, only clean non-code parts
+    parts = re.split(r'(```[\s\S]*?```)', text)
+    for i in range(0, len(parts), 2):  # Only process non-code parts (even indices)
+        if i < len(parts):
+            # Remove leaked line-numbered content
+            parts[i] = re.sub(r'^\s{0,4}\d{1,5}\s*\|.*$', '', parts[i], flags=re.MULTILINE)
+    text = ''.join(parts)
+
+    # Remove continuation instructions that leaked into output
+    text = re.sub(r'You have \d+ steps remaining\..*?(?:tool calls\.|response\.)', '', text, flags=re.DOTALL)
+    text = re.sub(r'Continue\. If you need more tools.*?(?:tool calls\.|response\.)', '', text, flags=re.DOTALL)
+    text = re.sub(r'You already read this file above\..*', '', text)
+    text = re.sub(r'DO NOT read the same file again\..*?(?:tool calls\.|response\.)', '', text, flags=re.DOTALL)
+
+    # Remove control tokens
+    text = re.sub(r'<\|(?:system|user|assistant|end|im_start|im_end|endoftext)\|>', '', text)
+
+    # Clean up excessive blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 # ─── Настоящая мультиагентная система ─────────────────────────────────────────
 
 class AgentOrchestrator:
@@ -425,6 +459,7 @@ Has project context: {has_context}
             if selected_code and len(message.split()) < 15:
                 return {"intent": "explain", "agents": ["analyst", "coder"],
                         "reasoning": "short question with code → explain + suggest fix",
+                        "needs_tools": True,
                         "confidence": 0.7}
             return {"intent": "general", "agents": ["analyst"],
                     "reasoning": "general question", "confidence": 0.5}
@@ -499,6 +534,7 @@ Has project context: {has_context}
         tool_descriptions = self.toolkit.get_tools_description()
         all_thinking = []
         tool_trace = []
+        files_already_read = set()  # Prevent re-reading same files
 
         # Определяем платформу
         platform_map = {"win32": "Windows", "linux": "Linux", "darwin": "macOS"}
@@ -516,7 +552,19 @@ Has project context: {has_context}
             f"2. ALWAYS use read_file to read file contents BEFORE analyzing, reviewing, refactoring, or modifying them.\n"
             f"3. Read ALL relevant files — do not guess or assume file contents.\n"
             f"4. When the user asks about their project, use search_code and list_files to explore it thoroughly.\n"
-            f"5. When suggesting terminal commands, use the correct syntax for {platform_name}.\n\n"
+            f"5. When suggesting terminal commands, use the correct syntax for {platform_name}.\n"
+            f"6. NEVER read the same file twice — use the content from your first read.\n"
+            f"7. When providing code fixes or replacements, ALWAYS specify:\n"
+            f"   - Файл: path/to/file.ext\n"
+            f"   - Строки: START-END (the line range to replace)\n"
+            f"   Then the code block. Example:\n"
+            f"   Файл: src/utils.py\n"
+            f"   Строки: 42-67\n"
+            f"   ```python\n"
+            f"   def improved_function():\n"
+            f"       pass\n"
+            f"   ```\n"
+            f"   This format helps the IDE insert code at the correct location.\n\n"
             f"{tool_descriptions}\n"
         )
 
@@ -538,8 +586,8 @@ Has project context: {has_context}
             logger.info(f"  [REACT step {step + 1}/{MAX_REACT_STEPS}]")
             await emit("status", f"🤔 Шаг {step + 1}: Агент размышляет...")
 
-            # Генерируем ответ
-            response = await self.llm.generate(messages_context, max_new_tokens=2048)
+            # Генерируем ответ (4096 tokens for detailed responses like code review)
+            response = await self.llm.generate(messages_context, max_new_tokens=4096)
             response, thinking = strip_think_tags(response)
 
             if thinking:
@@ -552,6 +600,8 @@ Has project context: {has_context}
             if not tool_calls:
                 # Нет tool calls — агент завершил работу
                 clean_response = strip_tool_calls(response)
+                # Remove any leaked tool result artifacts (line-numbered content from read_file)
+                clean_response = _clean_react_response(clean_response)
                 logger.info(f"  [REACT] Agent finished after {step + 1} steps")
 
                 # Извлекаем код из ответа
@@ -574,6 +624,15 @@ Has project context: {has_context}
                 tool_name = tc.get("tool", "unknown")
                 tool_args = tc.get("args", {})
 
+                # Prevent re-reading the same file (loop prevention)
+                if tool_name == "read_file":
+                    fpath = tool_args.get("file_path", "")
+                    if fpath in files_already_read:
+                        logger.info(f"  [TOOL SKIP] Already read {fpath}, skipping")
+                        tool_results_text += f"\n\n### Tool Result ({tool_name}):\nYou already read this file above. Use the contents from the previous read.\n"
+                        continue
+                    files_already_read.add(fpath)
+
                 await emit("tool_call", {"tool": tool_name, "args": tool_args})
                 logger.info(f"  [TOOL] {tool_name}({tool_args})")
 
@@ -583,16 +642,30 @@ Has project context: {has_context}
                 await emit("tool_result", {"tool": tool_name, "success": result.success, "output": result.output[:500]})
                 logger.info(f"  [TOOL RESULT] {result}")
 
-                tool_results_text += f"\n\n### Tool Result ({tool_name}):\n{result.output}\n"
+                # Truncate tool output to prevent context overflow
+                # For read_file: keep max 4000 chars (enough for most files)
+                truncated_output = result.output
+                if len(truncated_output) > 4000:
+                    truncated_output = truncated_output[:4000] + f"\n... [truncated, {len(result.output)} chars total]"
+
+                tool_results_text += f"\n\n### Tool Result ({tool_name}):\n{truncated_output}\n"
 
             # Добавляем результаты в контекст для следующей итерации
             clean_response = strip_tool_calls(response)
-            messages_context += f"{clean_response}\n\n{tool_results_text}\n\nContinue. If you need more tools, call them. If done, provide your final answer without tool calls.\n<|end|>\n<|assistant|>"
+            remaining_steps = MAX_REACT_STEPS - step - 1
+            messages_context += (
+                f"{clean_response}\n\n{tool_results_text}\n\n"
+                f"You have {remaining_steps} steps remaining. "
+                f"You have already read the file contents above — DO NOT read the same file again. "
+                f"Now provide your FINAL detailed answer based on the file contents you received. "
+                f"If you still need OTHER files, call tools. Otherwise, provide your complete response WITHOUT any tool calls.\n"
+                f"<|end|>\n<|assistant|>"
+            )
 
         # Если превышен лимит итераций
         logger.warning(f"  [REACT] Max steps reached ({MAX_REACT_STEPS})")
         return {
-            "response": strip_tool_calls(response) + "\n\n*⚠ Достигнут лимит итераций агента.*",
+            "response": _clean_react_response(strip_tool_calls(response)) + "\n\n*⚠ Достигнут лимит итераций агента.*",
             "code": accumulated_code,
             "agent": "react",
             "intent": intent,

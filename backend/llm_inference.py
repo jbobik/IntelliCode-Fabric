@@ -184,8 +184,11 @@ class LLMInference:
         return await loop.run_in_executor(None, lambda: self._generate_sync(prompt, **kwargs))
 
     def _generate_sync(self, prompt: str, **kwargs) -> str:
+        # Use model's max context length, fallback to 8192
+        max_ctx = getattr(self.model.config, 'max_position_embeddings', 8192)
+        max_ctx = min(max_ctx, 16384)  # cap at 16K to avoid OOM
         inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=4096,
+            prompt, return_tensors="pt", truncation=True, max_length=max_ctx,
         )
         input_device = next(self.model.parameters()).device
         inputs = {k: v.to(input_device) for k, v in inputs.items()}
@@ -222,7 +225,9 @@ class LLMInference:
             raise RuntimeError("No model loaded")
 
         streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=4096)
+        max_ctx = getattr(self.model.config, 'max_position_embeddings', 8192)
+        max_ctx = min(max_ctx, 16384)
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_ctx)
         input_device = next(self.model.parameters()).device
         inputs = {k: v.to(input_device) for k, v in inputs.items()}
 
