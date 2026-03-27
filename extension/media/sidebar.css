@@ -5,6 +5,19 @@
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* SVG inline icons */
+svg.ic {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    vertical-align: -2px;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+.agent-tag svg.ic { width: 12px; height: 12px; }
+.thinking-summary svg.ic { width: 13px; height: 13px; margin-right: 5px; }
+.tool-event svg.ic { width: 12px; height: 12px; }
+
 :root {
     --bg: var(--vscode-sideBar-background, #0f1117);
     --bg2: var(--vscode-editor-background, #161b22);
@@ -869,26 +882,59 @@ details.thinking-block[open] .thinking-summary::before {
 .msg pre:hover + .insert-bar,
 .insert-bar:hover { opacity: 1; }
 
-.insert-code-btn {
+/* ═══ ACTION BUTTONS (Replace/Add/Delete/Insert) ═══ */
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     padding: 3px 10px;
     font-size: 10px;
     font-weight: 600;
-    background: rgba(88,166,255,0.12);
-    color: var(--accent);
-    border: 1px solid rgba(88,166,255,0.25);
     border-radius: var(--radius);
     cursor: pointer;
     font-family: inherit;
     transition: all 0.15s;
 }
-.insert-code-btn:hover {
+.action-replace {
+    background: rgba(88,166,255,0.12);
+    color: var(--accent);
+    border: 1px solid rgba(88,166,255,0.25);
+}
+.action-replace:hover {
     background: rgba(88,166,255,0.25);
     border-color: var(--accent);
 }
-.insert-code-btn .insert-file-hint {
+.action-add {
+    background: rgba(63,185,80,0.12);
+    color: var(--green);
+    border: 1px solid rgba(63,185,80,0.25);
+}
+.action-add:hover {
+    background: rgba(63,185,80,0.25);
+    border-color: var(--green);
+}
+.action-delete {
+    background: rgba(248,81,73,0.12);
+    color: var(--red);
+    border: 1px solid rgba(248,81,73,0.25);
+}
+.action-delete:hover {
+    background: rgba(248,81,73,0.25);
+    border-color: var(--red);
+}
+.action-insert {
+    background: rgba(188,140,255,0.12);
+    color: var(--purple, #bc8cff);
+    border: 1px solid rgba(188,140,255,0.25);
+}
+.action-insert:hover {
+    background: rgba(188,140,255,0.25);
+    border-color: var(--purple, #bc8cff);
+}
+.action-btn .insert-file-hint {
     font-size: 9px;
-    color: var(--text-muted);
-    margin-left: 4px;
+    color: var(--text-dim);
+    margin-left: 2px;
 }
 
 /* ═══ EXTENDED FINE-TUNE PARAMS ═══ */
@@ -1059,11 +1105,7 @@ details.thinking-block[open] .thinking-summary::before {
     text-decoration: underline;
 }
 
-/* ═══ IMPROVED INSERT BUTTON STATES ═══ */
-.insert-code-btn.inserted {
-    background: rgba(63,185,80,0.3) !important;
-    color: var(--green) !important;
-}
+/* Action button success state is handled inline via SVG.check */
 
 /* ═══ EXECUTE COMMAND BUTTON ═══ */
 .exec-cmd-btn {

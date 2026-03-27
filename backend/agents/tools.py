@@ -28,6 +28,7 @@ BLOCKED_COMMANDS = [
     "rm -rf /", "rm -rf /*", "format", "mkfs",
     ":(){ :|:& };:", "dd if=/dev/zero",
     "shutdown", "reboot", "halt",
+    "sudo rm -rf", "sudo mkfs", "sudo dd",
 ]
 BLOCKED_PATTERNS = [
     r"rm\s+-rf\s+/(?!\w)",  # rm -rf / (но не rm -rf /some/path)
@@ -72,7 +73,7 @@ class AgentToolkit:
         self.workspace_root = Path(path)
 
     def _resolve_path(self, file_path: str) -> Path:
-        """Резолвит путь относительно workspace, проверяет безопасность"""
+        """Резолвит путь относительно workspace, проверяет безопасность."""
         p = Path(file_path)
         if not p.is_absolute():
             if self.workspace_root:
@@ -80,14 +81,16 @@ class AgentToolkit:
             else:
                 raise ValueError("No workspace root set and path is relative")
 
-        # Проверяем что путь не выходит за пределы workspace
+        # Resolve symlinks and check workspace boundaries
+        resolved = p.resolve()
         if self.workspace_root:
+            workspace_resolved = self.workspace_root.resolve()
             try:
-                p.resolve().relative_to(self.workspace_root.resolve())
+                resolved.relative_to(workspace_resolved)
             except ValueError:
                 raise ValueError(f"Path escapes workspace: {file_path}")
 
-        return p
+        return resolved
 
     # ─── READ FILE ────────────────────────────────────────────────────
 

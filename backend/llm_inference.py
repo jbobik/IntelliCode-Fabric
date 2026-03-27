@@ -104,14 +104,22 @@ class LLMInference:
 
         loaded = False
 
-        # 4-bit (CUDA + bitsandbytes)
         # Handle empty/none quantization
         if not quantization or quantization == "none":
             quantization = ""
 
-        if quantization == "4bit" and self.device == "cuda":
+        # Import BitsAndBytesConfig once for quantized loading
+        BitsAndBytesConfig = None
+        if self.device == "cuda":
             try:
-                from transformers import BitsAndBytesConfig
+                from transformers import BitsAndBytesConfig as _BnbConfig
+                BitsAndBytesConfig = _BnbConfig
+            except ImportError:
+                logger.warning("bitsandbytes not available, quantization disabled")
+
+        # 4-bit (CUDA + bitsandbytes)
+        if quantization == "4bit" and BitsAndBytesConfig:
+            try:
                 quant_config = BitsAndBytesConfig(
                     load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4",
@@ -126,9 +134,8 @@ class LLMInference:
                 logger.warning(f"4-bit load failed: {e}")
 
         # 8-bit fallback
-        if not loaded and self.device == "cuda":
+        if not loaded and BitsAndBytesConfig:
             try:
-                from transformers import BitsAndBytesConfig
                 self.model = AutoModelForCausalLM.from_pretrained(
                     model_path, quantization_config=BitsAndBytesConfig(load_in_8bit=True),
                     device_map="auto", trust_remote_code=True,

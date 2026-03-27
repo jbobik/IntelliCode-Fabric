@@ -4,6 +4,29 @@
 (function () {
     const vscode = acquireVsCodeApi();
 
+    // ── SVG Icon system ──
+    // Compact inline SVGs (16x16) for a professional look
+    const SVG = {
+        search:     '<svg class="ic" viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="10" y1="10" x2="15" y2="15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+        code:       '<svg class="ic" viewBox="0 0 16 16"><polyline points="4.5,2 0.5,8 4.5,14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="11.5,2 15.5,8 11.5,14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        refresh:    '<svg class="ic" viewBox="0 0 16 16"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="10,1 13.5,2.5 12,5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        flask:      '<svg class="ic" viewBox="0 0 16 16"><path d="M5.5 1h5v4l3.5 9H2L5.5 5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><line x1="4" y1="1" x2="12" y2="1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+        bolt:       '<svg class="ic" viewBox="0 0 16 16"><polygon points="9,1 3,9 7.5,9 6.5,15 13,7 8.5,7" fill="currentColor"/></svg>',
+        bot:        '<svg class="ic" viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="10.5" cy="8.5" r="1.2" fill="currentColor"/><line x1="8" y1="4" x2="8" y2="1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="1" r="0.8" fill="currentColor"/></svg>',
+        users:      '<svg class="ic" viewBox="0 0 16 16"><circle cx="6" cy="4" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1 14c0-3 2.2-5 5-5s5 2 5 5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="11" cy="5" r="2" fill="none" stroke="currentColor" stroke-width="1"/><path d="M12 9c2 0.5 3 2.3 3 5" fill="none" stroke="currentColor" stroke-width="1"/></svg>',
+        block:      '<svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="3.4" y1="3.4" x2="12.6" y2="12.6" stroke="currentColor" stroke-width="1.5"/></svg>',
+        file:       '<svg class="ic" viewBox="0 0 16 16"><path d="M4 1h5.5L13 4.5V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.2"/><polyline points="9,1 9,5 13,5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>',
+        fileEdit:   '<svg class="ic" viewBox="0 0 16 16"><path d="M4 1h5.5L13 4.5V9" fill="none" stroke="currentColor" stroke-width="1.2"/><polyline points="9,1 9,5 13,5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3 14V2a1 1 0 0 1 1-1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M9 15l-2 .5.5-2L12.3 8.7a1 1 0 0 1 1.4 0l.6.6a1 1 0 0 1 0 1.4z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>',
+        terminal:   '<svg class="ic" viewBox="0 0 16 16"><rect x="1" y="2" width="14" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><polyline points="4,6 7,8.5 4,11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="8" y1="11" x2="12" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+        folder:     '<svg class="ic" viewBox="0 0 16 16"><path d="M1.5 3A1.5 1.5 0 0 1 3 1.5h3l2 2h5A1.5 1.5 0 0 1 14.5 5v7.5A1.5 1.5 0 0 1 13 14H3A1.5 1.5 0 0 1 1.5 12.5z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>',
+        think:      '<svg class="ic" viewBox="0 0 16 16"><path d="M2 2h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H5l-3 3V3a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="7" r="0.8" fill="currentColor"/><circle cx="8" cy="7" r="0.8" fill="currentColor"/><circle cx="11" cy="7" r="0.8" fill="currentColor"/></svg>',
+        check:      '<svg class="ic" viewBox="0 0 16 16"><polyline points="2,8.5 6,12.5 14,3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        warn:       '<svg class="ic" viewBox="0 0 16 16"><path d="M8 1L1 14h14z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><line x1="8" y1="6" x2="8" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="12" r="0.7" fill="currentColor"/></svg>',
+        clip:       '<svg class="ic" viewBox="0 0 16 16"><path d="M10 2a3 3 0 0 0-3 3v6a2 2 0 0 0 4 0V5.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M11 5.5V11a4 4 0 0 1-8 0V5a3 3 0 0 1 6 0" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+        gear:       '<svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 0.5l1.2 2.1 2.3-.4.4 2.3 2.1 1.2-1.2 2 1.2 2-2.1 1.2-.4 2.3-2.3-.4L8 15.5l-1.2-2.1-2.3.4-.4-2.3-2.1-1.2 1.2-2-1.2-2 2.1-1.2.4-2.3 2.3.4z" fill="none" stroke="currentColor" stroke-width="0.8"/></svg>',
+        tool:       '<svg class="ic" viewBox="0 0 16 16"><path d="M10.5 1.5a3.5 3.5 0 0 0-3.2 4.8L2 11.5V14h2.5l5.2-5.3a3.5 3.5 0 0 0 4.8-3.2 3.5 3.5 0 0 0-4-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>',
+    };
+
     // ── DOM refs ──
     const chatArea = document.getElementById('chatArea');
     const chatInput = document.getElementById('chatInput');
@@ -363,19 +386,19 @@
             return;
         }
         const agentIcons = {
-            analyst: '🔍 Аналитик',
-            coder: '💻 Кодер',
-            refactor: '🔄 Рефактор',
-            tester: '🧪 Тестер',
-            multi: '🤝 Мульти',
-            filter: '🚫 Фильтр',
-            react: '⚡ ReAct',
-            read_file: '📖',
-            write_file: '✏️',
-            edit_file: '📝',
-            run_command: '⚙️',
-            search_code: '🔎',
-            list_files: '📁',
+            analyst: SVG.search + ' Аналитик',
+            coder: SVG.code + ' Кодер',
+            refactor: SVG.refresh + ' Рефактор',
+            tester: SVG.flask + ' Тестер',
+            multi: SVG.users + ' Мульти',
+            filter: SVG.block + ' Фильтр',
+            react: SVG.bolt + ' ReAct',
+            read_file: SVG.file,
+            write_file: SVG.fileEdit,
+            edit_file: SVG.fileEdit,
+            run_command: SVG.terminal,
+            search_code: SVG.search,
+            list_files: SVG.folder,
         };
         const steps = trace.map(a => agentIcons[a] || a).join(' → ');
         agentTraceText.innerHTML = `<span style="color:var(--accent)">Агенты:</span> ${steps}`;
@@ -411,7 +434,7 @@
             thinkingEl = document.createElement('details');
             thinkingEl.className = 'thinking-block stream-thinking';
             thinkingEl.innerHTML = `
-                <summary class="thinking-summary">💭 Размышления модели (live)</summary>
+                <summary class="thinking-summary">${SVG.think} Размышления модели (live)</summary>
                 <div class="thinking-content"></div>
             `;
             streamProgressEl.appendChild(thinkingEl);
@@ -429,10 +452,10 @@
         toolEl.className = 'stream-tool-call';
 
         const toolIcons = {
-            read_file: '📖', write_file: '✏️', edit_file: '📝',
-            run_command: '⚙️', search_code: '🔎', list_files: '📁',
+            read_file: SVG.file, write_file: SVG.fileEdit, edit_file: SVG.fileEdit,
+            run_command: SVG.terminal, search_code: SVG.search, list_files: SVG.folder,
         };
-        const icon = toolIcons[tool] || '🔧';
+        const icon = toolIcons[tool] || SVG.tool;
         const argsStr = args ? Object.entries(args).map(([k, v]) => {
             const val = typeof v === 'string' ? (v.length > 60 ? v.slice(0, 60) + '…' : v) : JSON.stringify(v);
             return `<span class="tool-arg-key">${k}</span>: ${escHtml(val)}`;
@@ -507,7 +530,7 @@
         chatInput.style.height = 'auto';
         isLoading = true;
         sendBtn.disabled = true;
-        showStreamProgress('🔍 Анализирую запрос...');
+        showStreamProgress('Анализирую запрос...');
     }
 
     function addMessage(role, content, extra) {
@@ -529,14 +552,14 @@
 
         if (extra.agent && role === 'assistant') {
             const labels = {
-                analyst: '🔍 Аналитик',
-                coder: '💻 Кодер',
-                refactor: '🔄 Рефактор',
-                tester: '🧪 Тестер',
-                general: '🤖 Ассистент',
-                multi: '🤝 Мультиагент',
-                filter: '🚫 Фильтр',
-                react: '⚡ ReAct-агент',
+                analyst: SVG.search + ' Аналитик',
+                coder: SVG.code + ' Кодер',
+                refactor: SVG.refresh + ' Рефактор',
+                tester: SVG.flask + ' Тестер',
+                general: SVG.bot + ' Ассистент',
+                multi: SVG.users + ' Мультиагент',
+                filter: SVG.block + ' Фильтр',
+                react: SVG.bolt + ' ReAct-агент',
             };
             const agentClass = extra.agent === 'filter' ? 'agent-general' : `agent-${extra.agent}`;
             html += `<div class="agent-tag ${agentClass}">${labels[extra.agent] || extra.agent}</div>`;
@@ -545,7 +568,7 @@
         // Thinking block (collapsible)
         if (extra.thinking) {
             html += `<details class="thinking-block">
-                <summary class="thinking-summary">💭 Размышления модели</summary>
+                <summary class="thinking-summary">${SVG.think} Размышления модели</summary>
                 <div class="thinking-content">${renderMarkdown(extra.thinking)}</div>
             </details>`;
         }
@@ -555,9 +578,9 @@
         // File changes section
         if (extra.file_changes && extra.file_changes.length) {
             html += '<div class="file-changes-section">';
-            html += '<div class="file-changes-header">📁 Изменения файлов:</div>';
+            html += '<div class="file-changes-header">' + SVG.folder + ' Изменения файлов:</div>';
             extra.file_changes.forEach((fc, idx) => {
-                const icon = fc.action === 'write' ? '✏️ Создан' : '📝 Изменён';
+                const icon = fc.action === 'write' ? SVG.fileEdit + ' Создан' : SVG.fileEdit + ' Изменён';
                 html += `<div class="file-change-item">
                     <span class="file-change-icon">${icon}</span>
                     <a class="file-change-path" data-file="${escHtml(fc.file)}">${escHtml(fc.file)}</a>
@@ -566,149 +589,165 @@
             html += '</div>';
         }
 
-        // Code actions: per-block + global
+        // Store code for reference (no global button)
         if (extra.code) {
-            // Parse file path from response if mentioned
-            const fileMatch = content.match(/(?:файл|file|в)\s+[`"]?([^\s`"]+\.\w{1,6})[`"]?/i);
-            const targetFile = fileMatch ? fileMatch[1] : null;
-
-            html += `<div class="code-actions">
-                <button class="code-action-btn primary-action insert-all-btn" ${targetFile ? `data-target="${escHtml(targetFile)}"` : ''}>
-                    ${targetFile ? `↳ Вставить в ${escHtml(targetFile)}` : '↳ Вставить всё'}
-                </button>
-                <button class="code-action-btn copy-btn">Копировать</button>
-            </div>`;
             bubble.setAttribute('data-code', extra.code);
         }
 
         if (extra.references && extra.references.length) {
             const uniqueRefs = [...new Set(extra.references)];
-            html += `<div class="references">📎 ${uniqueRefs.map(r =>
+            html += `<div class="references">${SVG.clip} ${uniqueRefs.map(r =>
                 `<a class="ref-link" data-file="${escHtml(r)}">${escHtml(r)}</a>`).join(', ')}</div>`;
         }
 
         bubble.innerHTML = html;
 
-        // ── Per-code-block buttons ──
+        // ── Per-code-block action buttons ──
         bubble.querySelectorAll('pre').forEach(pre => {
-            // Read file/line/lineEnd from data attributes set by renderMarkdown()
-            let blockTargetFile = pre.dataset.file || null;
-            let blockLineStart = pre.dataset.line ? parseInt(pre.dataset.line) : null;
+            // Read file/line/lineEnd/action from data attributes set by renderMarkdown()
+            let blockFile = pre.dataset.file || null;
+            let blockLine = pre.dataset.line ? parseInt(pre.dataset.line) : null;
             let blockLineEnd = pre.dataset.lineEnd ? parseInt(pre.dataset.lineEnd) : null;
+            let blockAction = pre.dataset.action || null; // 'replace' | 'add' | 'delete'
             const blockLang = pre.dataset.lang || '';
 
             const codeEl = pre.querySelector('code');
             const codeText = codeEl ? codeEl.textContent : pre.textContent;
 
             // Also check first comment line for file path
-            if (!blockTargetFile) {
+            if (!blockFile) {
                 const codeFileHint = codeText.match(/^(?:\/\/|#|\/\*)\s*(?:file|файл|File):\s*(\S+\.\w{1,6})/im);
-                if (codeFileHint) blockTargetFile = codeFileHint[1];
+                if (codeFileHint) blockFile = codeFileHint[1];
             }
 
-            // Detect if this is a terminal command
+            // Shell command detection
             const isCommand = isShellCommand(blockLang, codeText);
 
-            // Copy button — inside pre, top-right
+            // ─── Copy button (inside pre, top-right) ───
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-code-btn';
             copyBtn.textContent = 'Копировать';
             copyBtn.addEventListener('click', () => {
                 navigator.clipboard.writeText(codeText).then(() => {
-                    copyBtn.textContent = '✓ Скопировано';
-                    setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 2000);
+                    copyBtn.textContent = '✓';
+                    setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 1500);
                 });
             });
             pre.style.position = 'relative';
             pre.appendChild(copyBtn);
 
-            // Action bar — BELOW the pre element
+            // ─── Action bar (below pre) ───
             const actionBar = document.createElement('div');
             actionBar.className = 'insert-bar';
 
             if (isCommand) {
-                // ═══ EXECUTE BUTTON for terminal commands ═══
+                // ═══ EXECUTE for terminal commands ═══
                 const execBtn = document.createElement('button');
                 execBtn.className = 'exec-cmd-btn';
-                execBtn.innerHTML = '▶ Выполнить в терминале';
+                execBtn.innerHTML = SVG.terminal + ' Выполнить в терминале';
                 execBtn.title = `Выполнить: ${codeText.trim().split('\n')[0]}`;
                 execBtn.addEventListener('click', () => {
                     vscode.postMessage({ type: 'runCommand', command: codeText.trim() });
-                    execBtn.textContent = '✓ Запущено';
-                    execBtn.classList.add('executed');
-                    setTimeout(() => {
-                        execBtn.innerHTML = '▶ Выполнить в терминале';
-                        execBtn.classList.remove('executed');
-                    }, 2000);
+                    execBtn.innerHTML = SVG.check + ' Запущено';
+                    setTimeout(() => { execBtn.innerHTML = SVG.terminal + ' Выполнить в терминале'; }, 2000);
                 });
                 actionBar.appendChild(execBtn);
             } else {
-                // ═══ INSERT BUTTON for code ═══
-                const insertBtn = document.createElement('button');
-                insertBtn.className = 'insert-code-btn';
-                const fileLabel = blockTargetFile
-                    ? blockTargetFile.replace(/\\/g, '/').split('/').slice(-2).join('/')
+                // ═══ Context-aware code action buttons ═══
+                const fileLabel = blockFile
+                    ? blockFile.replace(/\\/g, '/').split('/').slice(-2).join('/')
                     : null;
-
-                const lineInfo = blockLineStart
-                    ? (blockLineEnd ? ` (строки ${blockLineStart}-${blockLineEnd})` : ` (строка ${blockLineStart})`)
+                const lineInfo = blockLine
+                    ? (blockLineEnd ? ` :${blockLine}-${blockLineEnd}` : ` :${blockLine}`)
                     : '';
+                const filePart = fileLabel ? `<span class="insert-file-hint">${escHtml(fileLabel)}${lineInfo}</span>` : '';
 
-                if (fileLabel) {
-                    insertBtn.innerHTML = `↳ Вставить в <span class="insert-file-hint">${escHtml(fileLabel)}${lineInfo}</span>`;
-                } else {
-                    insertBtn.textContent = '↳ Вставить в редактор';
-                }
-                insertBtn.title = blockTargetFile
-                    ? `Заменить код в ${blockTargetFile}${lineInfo}`
-                    : 'Вставить в активный редактор';
-                insertBtn.addEventListener('click', () => {
-                    vscode.postMessage({
-                        type: 'insertCode',
-                        code: codeText,
-                        targetFile: blockTargetFile,
-                        lineStart: blockLineStart,
-                        lineEnd: blockLineEnd,
+                // Determine which button(s) to show
+                if (blockAction === 'delete' && blockFile && blockLine) {
+                    // ── DELETE button ──
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'action-btn action-delete';
+                    delBtn.innerHTML = SVG.block + ' Удалить из ' + filePart;
+                    delBtn.title = `Удалить строки ${blockLine}-${blockLineEnd || blockLine} из ${blockFile}`;
+                    delBtn.addEventListener('click', () => {
+                        vscode.postMessage({
+                            type: 'codeAction', action: 'delete',
+                            targetFile: blockFile, lineStart: blockLine, lineEnd: blockLineEnd || blockLine,
+                        });
+                        delBtn.innerHTML = SVG.check + ' Удалено';
+                        setTimeout(() => { delBtn.innerHTML = SVG.block + ' Удалить из ' + filePart; }, 2000);
                     });
-                    insertBtn.textContent = '✓ Вставлено';
-                    insertBtn.classList.add('inserted');
-                    setTimeout(() => {
-                        if (fileLabel) {
-                            insertBtn.innerHTML = `↳ Вставить в <span class="insert-file-hint">${escHtml(fileLabel)}${lineInfo}</span>`;
-                        } else {
-                            insertBtn.textContent = '↳ Вставить в редактор';
-                        }
-                        insertBtn.classList.remove('inserted');
-                    }, 2000);
-                });
-                actionBar.appendChild(insertBtn);
+                    actionBar.appendChild(delBtn);
+
+                } else if (blockAction === 'add' && blockFile) {
+                    // ── ADD button ──
+                    const addBtn = document.createElement('button');
+                    addBtn.className = 'action-btn action-add';
+                    addBtn.innerHTML = '+ Добавить в ' + filePart;
+                    addBtn.title = `Добавить код в ${blockFile}${blockLine ? ' после строки ' + blockLine : ''}`;
+                    addBtn.addEventListener('click', () => {
+                        vscode.postMessage({
+                            type: 'codeAction', action: 'add',
+                            code: codeText, targetFile: blockFile,
+                            lineStart: blockLine, lineEnd: blockLineEnd,
+                        });
+                        addBtn.innerHTML = SVG.check + ' Добавлено';
+                        setTimeout(() => { addBtn.innerHTML = '+ Добавить в ' + filePart; }, 2000);
+                    });
+                    actionBar.appendChild(addBtn);
+
+                } else if (blockFile && blockLine) {
+                    // ── REPLACE button (default when file+lines present) ──
+                    const replBtn = document.createElement('button');
+                    replBtn.className = 'action-btn action-replace';
+                    replBtn.innerHTML = SVG.refresh + ' Заменить в ' + filePart;
+                    replBtn.title = `Заменить строки ${blockLine}-${blockLineEnd || '...'} в ${blockFile}`;
+                    replBtn.addEventListener('click', () => {
+                        vscode.postMessage({
+                            type: 'codeAction', action: 'replace',
+                            code: codeText, targetFile: blockFile,
+                            lineStart: blockLine, lineEnd: blockLineEnd,
+                        });
+                        replBtn.innerHTML = SVG.check + ' Заменено';
+                        setTimeout(() => { replBtn.innerHTML = SVG.refresh + ' Заменить в ' + filePart; }, 2000);
+                    });
+                    actionBar.appendChild(replBtn);
+
+                } else if (blockFile) {
+                    // ── ADD to file (no line specified) ──
+                    const addBtn = document.createElement('button');
+                    addBtn.className = 'action-btn action-add';
+                    addBtn.innerHTML = '+ Добавить в ' + filePart;
+                    addBtn.title = `Добавить код в конец ${blockFile}`;
+                    addBtn.addEventListener('click', () => {
+                        vscode.postMessage({
+                            type: 'codeAction', action: 'add',
+                            code: codeText, targetFile: blockFile,
+                        });
+                        addBtn.innerHTML = SVG.check + ' Добавлено';
+                        setTimeout(() => { addBtn.innerHTML = '+ Добавить в ' + filePart; }, 2000);
+                    });
+                    actionBar.appendChild(addBtn);
+
+                } else {
+                    // ── No file info — generic insert into active editor ──
+                    const insertBtn = document.createElement('button');
+                    insertBtn.className = 'action-btn action-insert';
+                    insertBtn.innerHTML = SVG.code + ' Вставить в редактор';
+                    insertBtn.title = 'Вставить код в позицию курсора';
+                    insertBtn.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'codeAction', action: 'insert', code: codeText });
+                        insertBtn.innerHTML = SVG.check + ' Вставлено';
+                        setTimeout(() => { insertBtn.innerHTML = SVG.code + ' Вставить в редактор'; }, 2000);
+                    });
+                    actionBar.appendChild(insertBtn);
+                }
             }
 
             pre.parentNode.insertBefore(actionBar, pre.nextSibling);
         });
 
-        // Global insert all button
-        const insertAllBtn = bubble.querySelector('.insert-all-btn');
-        if (insertAllBtn) {
-            insertAllBtn.addEventListener('click', () => {
-                const targetFile = insertAllBtn.getAttribute('data-target');
-                vscode.postMessage({ type: 'insertCode', code: bubble.getAttribute('data-code'), targetFile });
-                insertAllBtn.textContent = '✓ Вставлено';
-                setTimeout(() => {
-                    insertAllBtn.textContent = targetFile ? `↳ Вставить в ${targetFile}` : '↳ Вставить всё';
-                }, 2000);
-            });
-        }
-
-        const copyBtn2 = bubble.querySelector('.copy-btn');
-        if (copyBtn2) {
-            copyBtn2.addEventListener('click', () => {
-                navigator.clipboard.writeText(bubble.getAttribute('data-code')).then(() => {
-                    copyBtn2.textContent = '✓ Скопировано';
-                    setTimeout(() => { copyBtn2.textContent = 'Копировать'; }, 2000);
-                });
-            });
-        }
+        // (global copy-btn removed — each code block has its own Copy button)
 
         // File change links — click to open
         bubble.querySelectorAll('.file-change-path, .ref-link').forEach(link => {
@@ -752,17 +791,39 @@
     // ── Markdown renderer ──
 
     /**
-     * Extract file path and line range hints from text preceding a code block.
-     * Returns { file: string|null, line: number|null, lineEnd: number|null }
+     * Extract file path, line range, and ACTION type from text preceding a code block.
+     * Returns { file, line, lineEnd, action }
+     * action: 'replace' | 'add' | 'delete' | null
      */
     function extractFileLineHints(textBefore) {
-        const ctx = textBefore.slice(-800);
+        const ctx = textBefore.slice(-1000);
 
         let file = null;
         let line = null;
         let lineEnd = null;
+        let action = null;
 
-        // File patterns (most specific first)
+        // ── ACTION detection ──
+        // Explicit: "Действие: заменить/добавить/удалить" or "Action: replace/add/delete"
+        const actionMatch = ctx.match(/(?:Действие|Action)\s*[:：]\s*(заменить|добавить|удалить|replace|add|delete)/i);
+        if (actionMatch) {
+            const a = actionMatch[1].toLowerCase();
+            if (a === 'заменить' || a === 'replace') action = 'replace';
+            else if (a === 'добавить' || a === 'add') action = 'add';
+            else if (a === 'удалить' || a === 'delete') action = 'delete';
+        }
+
+        // Implicit action detection from surrounding text
+        if (!action) {
+            const lowerCtx = ctx.toLowerCase();
+            // Check last 300 chars for action keywords
+            const tail = lowerCtx.slice(-400);
+            if (/(?:удал(?:ить|и|яем|ите)|remove|delete)\s/.test(tail)) action = 'delete';
+            else if (/(?:добав(?:ить|ь|ляем|ьте)|add|insert|вставить)\s/.test(tail)) action = 'add';
+            else if (/(?:замен(?:ить|и|яем|ите)|replace|refactor|рефактор|перепиш|оптимизир|исправ|fix)/i.test(tail)) action = 'replace';
+        }
+
+        // ── FILE detection ──
         const filePatterns = [
             /(?:Файл|File|файл[еа]?)\s*[:：]\s*[`&quot;"]?([^\s`&<>"]+\.\w{1,6})[`&quot;"]?/gi,
             /(?:в файле|in file|из файла|from file)\s+[`&quot;"]?([^\s`&<>"]+\.\w{1,6})[`&quot;"]?/gi,
@@ -779,7 +840,7 @@
             }
         }
 
-        // Line RANGE patterns first: "строки 171-183", "lines 10-20", "строка: ~171-174"
+        // ── LINE RANGE detection ──
         const rangePatterns = [
             /(?:строк[аи]?|lines?|line)\s*[:：]?\s*~?(\d+)\s*[-–—]\s*(\d+)/gi,
             /\((?:строк[аи]?|lines?)\s+~?(\d+)\s*[-–—]\s*(\d+)\)/gi,
@@ -796,7 +857,7 @@
             }
         }
 
-        // If no range found, try single line
+        // Single line
         if (!line) {
             const singlePatterns = [
                 /(?:Строк[аи]?|Lines?|line|строк[аи]?)\s*[:：]?\s*~?(\d+)/gi,
@@ -812,7 +873,10 @@
             }
         }
 
-        return { file, line, lineEnd };
+        // Default action: if we have file+lines but no action, assume 'replace'
+        if (file && line && !action) action = 'replace';
+
+        return { file, line, lineEnd, action };
     }
 
     /**
@@ -873,12 +937,13 @@
             let lang = '', code = after;
             if (nl !== -1 && nl < 20) { lang = after.slice(0, nl).trim(); code = after.slice(nl + 1); }
 
-            // Extract file/line hints from text before code block
+            // Extract file/line/action hints from text before code block
             const hints = extractFileLineHints(textBefore);
             const dataAttrs = [];
             if (hints.file) dataAttrs.push(`data-file="${hints.file}"`);
             if (hints.line) dataAttrs.push(`data-line="${hints.line}"`);
             if (hints.lineEnd) dataAttrs.push(`data-line-end="${hints.lineEnd}"`);
+            if (hints.action) dataAttrs.push(`data-action="${hints.action}"`);
             if (lang) dataAttrs.push(`data-lang="${lang}"`);
             const attrStr = dataAttrs.length ? ' ' + dataAttrs.join(' ') : '';
 
@@ -1017,7 +1082,7 @@
                 break;
 
             case 'streamAgentStart':
-                showStreamProgress(`⚡ ${msg.agents ? msg.agents.join(' → ') : 'агент'} работает...`);
+                showStreamProgress(`${msg.agents ? msg.agents.join(' → ') : 'агент'} работает...`);
                 break;
 
             case 'streamToolCall':

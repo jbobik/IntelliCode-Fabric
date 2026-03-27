@@ -59,6 +59,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     await this._sendFtStatus();
                     break;
                 case 'insertCode': this._insertCode(msg.code, msg.targetFile, msg.lineStart, msg.lineEnd); break;
+                case 'codeAction': this._handleCodeAction(msg); break;
                 case 'runCommand': this._runCommand(msg.command); break;
                 case 'applyAllChanges': await this._applyAllChanges(msg.changes); break;
                 case 'createFile': await this._createFile(msg.filePath, msg.content); break;
@@ -84,11 +85,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         const editor = vscode.window.activeTextEditor;
         const selectedCode = editor?.selection.isEmpty ? undefined : editor?.document.getText(editor.selection);
         const contextFile = editor?.document.fileName;
+        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
 
         const body = JSON.stringify({
             message: message.content,
             selected_code: selectedCode,
             context_file: contextFile,
+            workspace_path: workspacePath,
             conversation_history: message.history || [],
             platform: process.platform,
         });
@@ -632,6 +635,137 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 eb.replace(editor.selection, code);
             }
         });
+    }
+
+    // ─── Smart Code Actions (replace/add/delete/insert) ────────
+
+    private async _handleCodeAction(msg: any) {
+        const { action, code, targetFile, lineStart, lineEnd } = msg;
+
+        if (action === 'insert' && !targetFile) {
+            // Simple insert into active editor at cursor
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                const doc = await vscode.workspace.openTextDocument({ content: code });
+                await vscode.window.showTextDocument(doc);
+                return;
+            }
+            await editor.edit(eb => {
+                if (editor.selection.isEmpty) {
+                    eb.insert(editor.selection.active, code);
+                } else {
+                    eb.replace(editor.selection, code);
+                }
+            });
+            return;
+        }
+
+        // Find and open the target file
+        const doc = await this._findAndOpenFile(targetFile);
+        if (!doc) {
+            // Fallback to active editor
+            if (code) {
+                this._handleCodeAction({ action: 'insert', code });
+            }
+            return;
+        }
+
+        const editor = await vscode.window.showTextDocument(doc.doc, {
+            viewColumn: vscode.ViewColumn.One,
+            preserveFocus: false,
+        });
+
+        if (action === 'delete') {
+            // DELETE: remove lines lineStart..lineEnd
+            const start = Math.max(0, (lineStart || 1) - 1);
+            const end = Math.min((lineEnd || lineStart || 1) - 1, doc.doc.lineCount - 1);
+            const range = new vscode.Range(
+                new vscode.Position(start, 0),
+                end + 1 < doc.doc.lineCount
+                    ? new vscode.Position(end + 1, 0) // include the newline
+                    : doc.doc.lineAt(end).range.end,
+            );
+            await editor.edit(eb => { eb.delete(range); });
+            vscode.window.showInformationMessage(`Deleted lines ${lineStart}-${lineEnd || lineStart} from ${targetFile}`);
+
+        } else if (action === 'replace') {
+            // REPLACE: replace lines lineStart..lineEnd with new code
+            if (!lineStart || !code) return;
+            const start = Math.min(lineStart - 1, doc.doc.lineCount - 1);
+            const end = lineEnd
+                ? Math.min(lineEnd - 1, doc.doc.lineCount - 1)
+                : Math.min(start + code.split('\n').length - 1, doc.doc.lineCount - 1);
+            const range = new vscode.Range(
+                new vscode.Position(start, 0),
+                doc.doc.lineAt(end).range.end,
+            );
+            await editor.edit(eb => { eb.replace(range, code); });
+            editor.revealRange(new vscode.Range(new vscode.Position(start, 0), new vscode.Position(start, 0)),
+                vscode.TextEditorRevealType.InCenter);
+            vscode.window.showInformationMessage(`Replaced lines ${lineStart}-${lineEnd || '...'} in ${targetFile}`);
+
+        } else if (action === 'add') {
+            // ADD: insert code after lineStart (or at end of file)
+            if (!code) return;
+            if (lineStart && lineStart > 0) {
+                const insertLine = Math.min(lineStart, doc.doc.lineCount);
+                const pos = insertLine < doc.doc.lineCount
+                    ? new vscode.Position(insertLine, 0)
+                    : doc.doc.lineAt(doc.doc.lineCount - 1).range.end;
+                const prefix = insertLine < doc.doc.lineCount ? '' : '\n';
+                const suffix = insertLine < doc.doc.lineCount ? '\n' : '';
+                await editor.edit(eb => { eb.insert(pos, prefix + code + suffix); });
+                editor.revealRange(new vscode.Range(new vscode.Position(insertLine, 0), new vscode.Position(insertLine, 0)),
+                    vscode.TextEditorRevealType.InCenter);
+            } else {
+                // No line — append to end
+                const lastLine = doc.doc.lineCount - 1;
+                const lastChar = doc.doc.lineAt(lastLine).text.length;
+                await editor.edit(eb => {
+                    eb.insert(new vscode.Position(lastLine, lastChar), '\n\n' + code);
+                });
+            }
+            vscode.window.showInformationMessage(`Added code to ${targetFile}${lineStart ? ' at line ' + lineStart : ''}`);
+        }
+    }
+
+    /**
+     * Find a file in workspace by path and return the opened document.
+     */
+    private async _findAndOpenFile(targetFile: string): Promise<{ doc: vscode.TextDocument } | null> {
+        if (!targetFile) return null;
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return null;
+
+        const normalizedTarget = targetFile.replace(/\\/g, '/');
+        const candidates: vscode.Uri[] = [
+            vscode.Uri.joinPath(workspaceFolders[0].uri, normalizedTarget),
+            vscode.Uri.file(targetFile),
+        ];
+
+        // Search by filename
+        const fileName = normalizedTarget.split('/').pop() || '';
+        if (fileName) {
+            try {
+                const found = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 5);
+                for (const f of found) {
+                    if (f.fsPath.replace(/\\/g, '/').endsWith(normalizedTarget)) {
+                        candidates.unshift(f);
+                    }
+                }
+                candidates.push(...found);
+            } catch {}
+        }
+
+        for (const uri of candidates) {
+            try {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                return { doc };
+            } catch { continue; }
+        }
+
+        vscode.window.showWarningMessage(`File not found: ${targetFile}`);
+        return null;
     }
 
     // ─── Run Command in Terminal ────────────────────────────────

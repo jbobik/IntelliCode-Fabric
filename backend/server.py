@@ -90,6 +90,7 @@ class ChatRequest(BaseModel):
     message: str
     context_file: Optional[str] = None
     selected_code: Optional[str] = None
+    workspace_path: Optional[str] = None  # Full path to workspace root
     conversation_history: list = []
     platform: Optional[str] = None  # 'win32', 'linux', 'darwin'
 
@@ -171,7 +172,8 @@ def _load_custom_models_list():
         try:
             _custom_models = json.loads(custom_path.read_text())
             logger.info(f"Loaded {len(_custom_models)} custom models from disk")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to load custom models: {e}")
             _custom_models = []
 
 
@@ -220,7 +222,8 @@ async def list_models():
         if model_path.exists():
             try:
                 downloaded = any(model_path.iterdir())
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not check model directory {model_path}: {e}")
                 downloaded = False
 
         # For custom models loaded from HF directly, check if engine has it
@@ -466,6 +469,7 @@ async def chat(req: ChatRequest):
             selected_code=req.selected_code,
             conversation_history=req.conversation_history,
             platform=req.platform,
+            workspace_path=req.workspace_path,
         )
         return response
     except Exception as e:
@@ -496,6 +500,7 @@ async def chat_stream(req: ChatRequest):
                 conversation_history=req.conversation_history,
                 stream_callback=stream_callback,
                 platform=req.platform,
+                workspace_path=req.workspace_path,
             )
             await event_queue.put({"type": "final_result", "data": result})
         except Exception as e:

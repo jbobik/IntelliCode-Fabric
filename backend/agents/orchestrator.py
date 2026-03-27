@@ -216,6 +216,7 @@ class AgentOrchestrator:
         conversation_history: list = None,
         stream_callback: Optional[Callable] = None,
         platform: Optional[str] = None,
+        workspace_path: Optional[str] = None,
     ) -> dict:
         """
         stream_callback(event_type, data) — для real-time streaming в UI.
@@ -232,17 +233,26 @@ class AgentOrchestrator:
             if stream_callback:
                 await stream_callback(event_type, data)
 
-        # Устанавливаем workspace
-        if context_file:
-            from pathlib import Path
+        # Устанавливаем workspace — приоритет: workspace_path > context_file > fallback
+        from pathlib import Path
+        if workspace_path:
+            self.toolkit.set_workspace(workspace_path)
+            logger.info(f"Workspace set from workspace_path: {workspace_path}")
+        elif context_file:
             cf = Path(context_file)
+            workspace_set = False
             for parent in cf.parents:
                 if (parent / ".git").exists() or (parent / "package.json").exists() or (parent / "pyproject.toml").exists():
                     self.toolkit.set_workspace(str(parent))
+                    logger.info(f"Workspace set from context_file project root: {parent}")
+                    workspace_set = True
                     break
-            else:
-                if cf.parent.exists():
-                    self.toolkit.set_workspace(str(cf.parent))
+            if not workspace_set and cf.parent.exists():
+                self.toolkit.set_workspace(str(cf.parent))
+                logger.info(f"Workspace set from context_file parent: {cf.parent}")
+
+        if not self.toolkit.workspace_root:
+            logger.warning("No workspace root set! Tools requiring file access will fail.")
 
         # Определяем язык пользователя
         user_lang = detect_language(message)
@@ -554,17 +564,39 @@ Has project context: {has_context}
             f"4. When the user asks about their project, use search_code and list_files to explore it thoroughly.\n"
             f"5. When suggesting terminal commands, use the correct syntax for {platform_name}.\n"
             f"6. NEVER read the same file twice — use the content from your first read.\n"
-            f"7. When providing code fixes or replacements, ALWAYS specify:\n"
-            f"   - Файл: path/to/file.ext\n"
-            f"   - Строки: START-END (the line range to replace)\n"
-            f"   Then the code block. Example:\n"
+            f"7. For EVERY code suggestion, ALWAYS specify action, file, and lines using this EXACT format:\n"
+            f"   Действие: заменить|добавить|удалить\n"
+            f"   Файл: path/to/file.ext\n"
+            f"   Строки: START-END\n"
+            f"   ```lang\n"
+            f"   code here\n"
+            f"   ```\n"
+            f"\n"
+            f"   EXAMPLES:\n"
+            f"   To REPLACE code (заменить):\n"
+            f"   Действие: заменить\n"
             f"   Файл: src/utils.py\n"
             f"   Строки: 42-67\n"
             f"   ```python\n"
             f"   def improved_function():\n"
             f"       pass\n"
             f"   ```\n"
-            f"   This format helps the IDE insert code at the correct location.\n\n"
+            f"\n"
+            f"   To ADD new code (добавить) after a specific line:\n"
+            f"   Действие: добавить\n"
+            f"   Файл: src/utils.py\n"
+            f"   Строка: 15\n"
+            f"   ```python\n"
+            f"   def new_function():\n"
+            f"       pass\n"
+            f"   ```\n"
+            f"\n"
+            f"   To DELETE code (удалить):\n"
+            f"   Действие: удалить\n"
+            f"   Файл: src/utils.py\n"
+            f"   Строки: 42-50\n"
+            f"\n"
+            f"   ALWAYS include Действие, Файл, and Строки for EVERY code block! This is CRITICAL.\n\n"
             f"{tool_descriptions}\n"
         )
 
