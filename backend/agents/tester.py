@@ -1,6 +1,9 @@
 """
-Tester Agent v3 — генерирует unit-тесты, определяет фреймворк автоматически.
-Теперь с поддержкой lang_instruction.
+Tester Agent v4 — генерирует unit-тесты, определяет фреймворк автоматически.
+
+Улучшения v4:
+- НЕ удаляет <think> теги — orchestrator извлечёт и покажет в UI
+- lang_instruction для ответов на языке пользователя
 """
 
 import re
@@ -9,24 +12,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _strip_think(text: str) -> str:
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(r"</?think>", "", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
-
 class TesterAgent:
     def __init__(self, llm):
         self.llm = llm
-
-    async def analyze(self, question, context, history=None, lang_instruction=""):
-        from .orchestrator import sanitize_response  # добавить импорт
-        prompt = self._build_prompt(question, context, history or [], lang_instruction)
-        response = await self.llm.generate(prompt)
-        response = _strip_think(response)
-        response = sanitize_response(response)  # ← ДОБАВИТЬ
-        references = self._extract_references(response)
-        return {"response": response, "references": references}
 
     async def generate_tests(self, code: str, instruction: str = "",
                              context: str = "", lang_instruction: str = "") -> dict:
@@ -36,8 +24,7 @@ class TesterAgent:
 
         prompt = (
             "<|system|>\n"
-            f"You are an expert test engineer. Generate comprehensive tests using {framework}.\n"
-            "CRITICAL: Do NOT output <think> tags or internal reasoning. Output only the final tests.\n\n"
+            f"You are an expert test engineer. Generate comprehensive tests using {framework}.\n\n"
             f"{lang_instruction}\n\n"
             "Rules:\n"
             "1. Cover all public functions/methods\n"
@@ -57,9 +44,11 @@ class TesterAgent:
         prompt += f"## Instructions: {test_instruction}\n## Framework: {framework}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
-        response = _strip_think(response)
+        # НЕ strip_think — orchestrator извлечёт thinking
 
-        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', response, re.DOTALL)
+        # Извлекаем тестовый код (очищаем think для парсинга)
+        clean_for_parse = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', clean_for_parse, re.DOTALL)
         test_code = code_blocks[0].strip() if code_blocks else None
 
         return {

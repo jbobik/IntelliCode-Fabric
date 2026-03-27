@@ -1,7 +1,8 @@
 """
-Coder Agent v3 — генерирует код, реализует функции, inline-редактирование.
+Coder Agent v4 — генерирует код, реализует функции, inline-редактирование.
 
-Улучшения v3:
+Улучшения v4:
+- НЕ удаляет <think> теги — orchestrator извлечёт и покажет в UI
 - lang_instruction для ответов на языке пользователя
 - Улучшенная extraction кода из ответа
 """
@@ -13,34 +14,16 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _strip_think(text: str) -> str:
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(r"</?think>", "", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
 class CoderAgent:
     def __init__(self, llm):
         self.llm = llm
-
-
-
-    async def analyze(self, question, context, history=None, lang_instruction=""):
-        from .orchestrator import sanitize_response  # добавить импорт
-        prompt = self._build_prompt(question, context, history or [], lang_instruction)
-        response = await self.llm.generate(prompt)
-        response = _strip_think(response)
-        response = sanitize_response(response)  # ← ДОБАВИТЬ
-        references = self._extract_references(response)
-        return {"response": response, "references": references}
 
     async def generate(self, message: str, context: str,
                        selected_code: Optional[str] = None, analysis: str = "",
                        lang_instruction: str = "") -> dict:
         prompt = (
             "<|system|>\n"
-            "You are an expert code generator. Write clean, well-documented, production-ready code.\n"
-            "CRITICAL: Do NOT output <think> tags, reasoning chains, or internal thoughts. "
-            "Output only the final code and brief explanation.\n\n"
+            "You are an expert code generator. Write clean, well-documented, production-ready code.\n\n"
             f"{lang_instruction}\n\n"
             "Rules:\n"
             "1. Follow the coding style and conventions visible in the project context\n"
@@ -62,7 +45,7 @@ class CoderAgent:
         prompt += f"## Request: {message}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
-        response = _strip_think(response)
+        # НЕ strip_think — orchestrator извлечёт thinking
         code = self._extract_code(response)
         return {"response": response, "code": code}
 
@@ -72,7 +55,7 @@ class CoderAgent:
         prompt = (
             "<|system|>\n"
             "You are a precise code editor. Apply the given instruction to the code.\n"
-            "CRITICAL: Do NOT output <think> tags. Output ONLY the modified code, nothing else.\n"
+            "Output ONLY the modified code, nothing else.\n"
             "Preserve indentation, style, and all unrelated functionality.\n"
             f"{lang_instruction}\n"
             "<|end|>\n"
@@ -84,21 +67,22 @@ class CoderAgent:
         prompt += f"## Edit instruction: {instruction}\n\nOutput only the edited code:\n<|end|>\n<|assistant|>\n```\n"
 
         response = await self.llm.generate(prompt, max_new_tokens=1024)
-        response = _strip_think(response)
         edited_code = self._extract_code(response) or response.strip()
         return {"code": edited_code, "response": f"Applied edit: {instruction}"}
 
     def _extract_code(self, response: str) -> Optional[str]:
-        matches = re.findall(r'```(?:\w+)?\n(.*?)```', response, re.DOTALL)
+        # Clean think tags for code extraction
+        clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+        matches = re.findall(r'```(?:\w+)?\n(.*?)```', clean, re.DOTALL)
         if matches:
             return matches[0].strip()
 
-        lines = response.strip().split('\n')
+        lines = clean.strip().split('\n')
         code_indicators = [
             'def ', 'class ', 'import ', 'from ', 'function ', 'const ',
             'let ', 'var ', 'export ', 'return ', 'async def ', 'public ',
         ]
         if lines and any(lines[0].strip().startswith(ind) for ind in code_indicators):
-            return response.strip()
+            return clean.strip()
 
         return None

@@ -63,6 +63,9 @@
     let ftPolling = null;
     let downloadPolling = {};
 
+    // Streaming state
+    let streamProgressEl = null;
+
     // Restore state
     const prev = vscode.getState() || {};
     conversationHistory = prev.conversationHistory || [];
@@ -75,7 +78,7 @@
     vscode.postMessage({ type: 'getAdapters' });
 
     // ════════════════════════════════════════════
-    //  MODEL PICKER (with custom model tier)
+    //  MODEL PICKER
     // ════════════════════════════════════════════
 
     changeModelBtn.addEventListener('click', () => {
@@ -97,7 +100,6 @@
             'finetune-base': '🏗️ Базовые для дообучения',
         };
 
-        // Check if there are custom models
         const customModels = models.filter(m => m.tags && m.tags.includes('custom'));
         if (customModels.length) {
             tierOrder.push('custom');
@@ -182,7 +184,6 @@
         });
         adapterList.appendChild(noneOpt);
 
-        // Show ALL adapters for this model
         modelAdapters.forEach(a => {
             const opt = document.createElement('div');
             opt.className = 'adapter-option' + (a.id === selectedAdapterId ? ' selected' : '');
@@ -266,7 +267,7 @@
     });
 
     // ════════════════════════════════════════════
-    //  FINE-TUNE PANEL (extended params)
+    //  FINE-TUNE PANEL
     // ════════════════════════════════════════════
 
     fineTuneBtn.addEventListener('click', () => {
@@ -297,7 +298,6 @@
 
         if (!strategies.length) { addSystemMsg('Выберите хотя бы одну стратегию обучения'); return; }
 
-        // Collect extended params
         const lr = parseFloat(document.getElementById('ftLearningRate')?.value) || undefined;
         const bs = parseInt(document.getElementById('ftBatchSize')?.value) || undefined;
         const ga = parseInt(document.getElementById('ftGradAccum')?.value) || undefined;
@@ -369,11 +369,96 @@
             tester: '🧪 Тестер',
             multi: '🤝 Мульти',
             filter: '🚫 Фильтр',
+            react: '⚡ ReAct',
+            read_file: '📖',
+            write_file: '✏️',
+            edit_file: '📝',
+            run_command: '⚙️',
+            search_code: '🔎',
+            list_files: '📁',
         };
         const steps = trace.map(a => agentIcons[a] || a).join(' → ');
         agentTraceText.innerHTML = `<span style="color:var(--accent)">Агенты:</span> ${steps}`;
         agentTraceBar.style.display = 'block';
-        setTimeout(() => { agentTraceBar.style.display = 'none'; }, 10000);
+        setTimeout(() => { agentTraceBar.style.display = 'none'; }, 15000);
+    }
+
+    // ════════════════════════════════════════════
+    //  STREAMING PROGRESS PANEL
+    // ════════════════════════════════════════════
+
+    function showStreamProgress(text) {
+        if (!streamProgressEl) {
+            streamProgressEl = document.createElement('div');
+            streamProgressEl.className = 'stream-progress';
+            streamProgressEl.id = 'streamProgress';
+            chatArea.appendChild(streamProgressEl);
+        }
+        streamProgressEl.innerHTML = `
+            <div class="stream-progress-inner">
+                <div class="stream-progress-spinner"></div>
+                <div class="stream-progress-text">${escHtml(text)}</div>
+            </div>
+        `;
+        chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function addStreamThinking(text) {
+        if (!streamProgressEl) showStreamProgress('Размышляю...');
+
+        let thinkingEl = streamProgressEl.querySelector('.stream-thinking');
+        if (!thinkingEl) {
+            thinkingEl = document.createElement('details');
+            thinkingEl.className = 'thinking-block stream-thinking';
+            thinkingEl.innerHTML = `
+                <summary class="thinking-summary">💭 Размышления модели (live)</summary>
+                <div class="thinking-content"></div>
+            `;
+            streamProgressEl.appendChild(thinkingEl);
+        }
+
+        const content = thinkingEl.querySelector('.thinking-content');
+        content.innerHTML = renderMarkdown(text);
+        chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function addStreamToolCall(tool, args) {
+        if (!streamProgressEl) showStreamProgress('Использую инструменты...');
+
+        const toolEl = document.createElement('div');
+        toolEl.className = 'stream-tool-call';
+
+        const toolIcons = {
+            read_file: '📖', write_file: '✏️', edit_file: '📝',
+            run_command: '⚙️', search_code: '🔎', list_files: '📁',
+        };
+        const icon = toolIcons[tool] || '🔧';
+        const argsStr = args ? Object.entries(args).map(([k, v]) => {
+            const val = typeof v === 'string' ? (v.length > 60 ? v.slice(0, 60) + '…' : v) : JSON.stringify(v);
+            return `<span class="tool-arg-key">${k}</span>: ${escHtml(val)}`;
+        }).join(', ') : '';
+
+        toolEl.innerHTML = `${icon} <span class="tool-name">${tool}</span>(${argsStr})`;
+        streamProgressEl.appendChild(toolEl);
+        chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function addStreamToolResult(tool, success, output) {
+        if (!streamProgressEl) return;
+
+        const resultEl = document.createElement('div');
+        resultEl.className = 'stream-tool-result ' + (success ? 'success' : 'error');
+        const short = output && output.length > 200 ? output.slice(0, 200) + '…' : (output || '');
+        resultEl.innerHTML = `${success ? '✓' : '✗'} ${escHtml(short)}`;
+        streamProgressEl.appendChild(resultEl);
+        chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function removeStreamProgress() {
+        if (streamProgressEl) {
+            streamProgressEl.remove();
+            streamProgressEl = null;
+        }
     }
 
     // ════════════════════════════════════════════
@@ -403,9 +488,10 @@
 
     clearBtn.addEventListener('click', () => {
         conversationHistory = [];
-        chatArea.querySelectorAll('.msg, .typing-indicator, .streaming-msg').forEach(el => el.remove());
+        chatArea.querySelectorAll('.msg, .typing-indicator, .streaming-msg, .stream-progress').forEach(el => el.remove());
         welcomeState.style.display = '';
         agentTraceBar.style.display = 'none';
+        streamProgressEl = null;
         saveState();
     });
 
@@ -421,7 +507,7 @@
         chatInput.style.height = 'auto';
         isLoading = true;
         sendBtn.disabled = true;
-        showTyping();
+        showStreamProgress('🔍 Анализирую запрос...');
     }
 
     function addMessage(role, content, extra) {
@@ -450,6 +536,7 @@
                 general: '🤖 Ассистент',
                 multi: '🤝 Мультиагент',
                 filter: '🚫 Фильтр',
+                react: '⚡ ReAct-агент',
             };
             const agentClass = extra.agent === 'filter' ? 'agent-general' : `agent-${extra.agent}`;
             html += `<div class="agent-tag ${agentClass}">${labels[extra.agent] || extra.agent}</div>`;
@@ -465,10 +552,30 @@
 
         html += renderMarkdown(content);
 
-        // Per-code-block insert buttons + global insert
+        // File changes section
+        if (extra.file_changes && extra.file_changes.length) {
+            html += '<div class="file-changes-section">';
+            html += '<div class="file-changes-header">📁 Изменения файлов:</div>';
+            extra.file_changes.forEach((fc, idx) => {
+                const icon = fc.action === 'write' ? '✏️ Создан' : '📝 Изменён';
+                html += `<div class="file-change-item">
+                    <span class="file-change-icon">${icon}</span>
+                    <a class="file-change-path" data-file="${escHtml(fc.file)}">${escHtml(fc.file)}</a>
+                </div>`;
+            });
+            html += '</div>';
+        }
+
+        // Code actions: per-block + global
         if (extra.code) {
+            // Parse file path from response if mentioned
+            const fileMatch = content.match(/(?:файл|file|в)\s+[`"]?([^\s`"]+\.\w{1,6})[`"]?/i);
+            const targetFile = fileMatch ? fileMatch[1] : null;
+
             html += `<div class="code-actions">
-                <button class="code-action-btn primary-action insert-all-btn">↳ Вставить всё</button>
+                <button class="code-action-btn primary-action insert-all-btn" ${targetFile ? `data-target="${escHtml(targetFile)}"` : ''}>
+                    ${targetFile ? `↳ Вставить в ${escHtml(targetFile)}` : '↳ Вставить всё'}
+                </button>
                 <button class="code-action-btn copy-btn">Копировать</button>
             </div>`;
             bubble.setAttribute('data-code', extra.code);
@@ -477,47 +584,119 @@
         if (extra.references && extra.references.length) {
             const uniqueRefs = [...new Set(extra.references)];
             html += `<div class="references">📎 ${uniqueRefs.map(r =>
-                `<a class="ref-link">${escHtml(r)}</a>`).join(', ')}</div>`;
+                `<a class="ref-link" data-file="${escHtml(r)}">${escHtml(r)}</a>`).join(', ')}</div>`;
         }
 
         bubble.innerHTML = html;
 
-        // Copy + insert buttons on EACH code block
+        // ── Per-code-block buttons ──
         bubble.querySelectorAll('pre').forEach(pre => {
-            const btnRow = document.createElement('div');
-            btnRow.className = 'pre-btn-row';
+            // Read file/line/lineEnd from data attributes set by renderMarkdown()
+            let blockTargetFile = pre.dataset.file || null;
+            let blockLineStart = pre.dataset.line ? parseInt(pre.dataset.line) : null;
+            let blockLineEnd = pre.dataset.lineEnd ? parseInt(pre.dataset.lineEnd) : null;
+            const blockLang = pre.dataset.lang || '';
 
+            const codeEl = pre.querySelector('code');
+            const codeText = codeEl ? codeEl.textContent : pre.textContent;
+
+            // Also check first comment line for file path
+            if (!blockTargetFile) {
+                const codeFileHint = codeText.match(/^(?:\/\/|#|\/\*)\s*(?:file|файл|File):\s*(\S+\.\w{1,6})/im);
+                if (codeFileHint) blockTargetFile = codeFileHint[1];
+            }
+
+            // Detect if this is a terminal command
+            const isCommand = isShellCommand(blockLang, codeText);
+
+            // Copy button — inside pre, top-right
             const copyBtn = document.createElement('button');
             copyBtn.className = 'copy-code-btn';
             copyBtn.textContent = 'Копировать';
             copyBtn.addEventListener('click', () => {
-                const code = pre.querySelector('code');
-                navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
-                    copyBtn.textContent = 'Скопировано!';
+                navigator.clipboard.writeText(codeText).then(() => {
+                    copyBtn.textContent = '✓ Скопировано';
                     setTimeout(() => { copyBtn.textContent = 'Копировать'; }, 2000);
                 });
             });
-
-            const insertBtn = document.createElement('button');
-            insertBtn.className = 'insert-code-btn';
-            insertBtn.textContent = '↳ Вставить';
-            insertBtn.addEventListener('click', () => {
-                const code = pre.querySelector('code');
-                const codeText = code ? code.textContent : pre.textContent;
-                vscode.postMessage({ type: 'insertCode', code: codeText });
-            });
-
-            btnRow.appendChild(insertBtn);
-            btnRow.appendChild(copyBtn);
             pre.style.position = 'relative';
-            pre.appendChild(btnRow);
+            pre.appendChild(copyBtn);
+
+            // Action bar — BELOW the pre element
+            const actionBar = document.createElement('div');
+            actionBar.className = 'insert-bar';
+
+            if (isCommand) {
+                // ═══ EXECUTE BUTTON for terminal commands ═══
+                const execBtn = document.createElement('button');
+                execBtn.className = 'exec-cmd-btn';
+                execBtn.innerHTML = '▶ Выполнить в терминале';
+                execBtn.title = `Выполнить: ${codeText.trim().split('\n')[0]}`;
+                execBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'runCommand', command: codeText.trim() });
+                    execBtn.textContent = '✓ Запущено';
+                    execBtn.classList.add('executed');
+                    setTimeout(() => {
+                        execBtn.innerHTML = '▶ Выполнить в терминале';
+                        execBtn.classList.remove('executed');
+                    }, 2000);
+                });
+                actionBar.appendChild(execBtn);
+            } else {
+                // ═══ INSERT BUTTON for code ═══
+                const insertBtn = document.createElement('button');
+                insertBtn.className = 'insert-code-btn';
+                const fileLabel = blockTargetFile
+                    ? blockTargetFile.replace(/\\/g, '/').split('/').slice(-2).join('/')
+                    : null;
+
+                const lineInfo = blockLineStart
+                    ? (blockLineEnd ? ` (строки ${blockLineStart}-${blockLineEnd})` : ` (строка ${blockLineStart})`)
+                    : '';
+
+                if (fileLabel) {
+                    insertBtn.innerHTML = `↳ Вставить в <span class="insert-file-hint">${escHtml(fileLabel)}${lineInfo}</span>`;
+                } else {
+                    insertBtn.textContent = '↳ Вставить в редактор';
+                }
+                insertBtn.title = blockTargetFile
+                    ? `Заменить код в ${blockTargetFile}${lineInfo}`
+                    : 'Вставить в активный редактор';
+                insertBtn.addEventListener('click', () => {
+                    vscode.postMessage({
+                        type: 'insertCode',
+                        code: codeText,
+                        targetFile: blockTargetFile,
+                        lineStart: blockLineStart,
+                        lineEnd: blockLineEnd,
+                    });
+                    insertBtn.textContent = '✓ Вставлено';
+                    insertBtn.classList.add('inserted');
+                    setTimeout(() => {
+                        if (fileLabel) {
+                            insertBtn.innerHTML = `↳ Вставить в <span class="insert-file-hint">${escHtml(fileLabel)}${lineInfo}</span>`;
+                        } else {
+                            insertBtn.textContent = '↳ Вставить в редактор';
+                        }
+                        insertBtn.classList.remove('inserted');
+                    }, 2000);
+                });
+                actionBar.appendChild(insertBtn);
+            }
+
+            pre.parentNode.insertBefore(actionBar, pre.nextSibling);
         });
 
         // Global insert all button
         const insertAllBtn = bubble.querySelector('.insert-all-btn');
         if (insertAllBtn) {
             insertAllBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'insertCode', code: bubble.getAttribute('data-code') });
+                const targetFile = insertAllBtn.getAttribute('data-target');
+                vscode.postMessage({ type: 'insertCode', code: bubble.getAttribute('data-code'), targetFile });
+                insertAllBtn.textContent = '✓ Вставлено';
+                setTimeout(() => {
+                    insertAllBtn.textContent = targetFile ? `↳ Вставить в ${targetFile}` : '↳ Вставить всё';
+                }, 2000);
             });
         }
 
@@ -525,11 +704,19 @@
         if (copyBtn2) {
             copyBtn2.addEventListener('click', () => {
                 navigator.clipboard.writeText(bubble.getAttribute('data-code')).then(() => {
-                    copyBtn2.textContent = 'Скопировано!';
+                    copyBtn2.textContent = '✓ Скопировано';
                     setTimeout(() => { copyBtn2.textContent = 'Копировать'; }, 2000);
                 });
             });
         }
+
+        // File change links — click to open
+        bubble.querySelectorAll('.file-change-path, .ref-link').forEach(link => {
+            link.addEventListener('click', () => {
+                const file = link.getAttribute('data-file');
+                if (file) vscode.postMessage({ type: 'openFile', filePath: file });
+            });
+        });
 
         wrapper.appendChild(bubble);
         chatArea.appendChild(wrapper);
@@ -562,21 +749,115 @@
         chatArea.scrollTop = chatArea.scrollHeight;
     }
 
-    // ── Markdown renderer (with FIXED TABLE support) ──
+    // ── Markdown renderer ──
+
+    /**
+     * Extract file path and line range hints from text preceding a code block.
+     * Returns { file: string|null, line: number|null, lineEnd: number|null }
+     */
+    function extractFileLineHints(textBefore) {
+        const ctx = textBefore.slice(-800);
+
+        let file = null;
+        let line = null;
+        let lineEnd = null;
+
+        // File patterns (most specific first)
+        const filePatterns = [
+            /(?:Файл|File|файл[еа]?)\s*[:：]\s*[`&quot;"]?([^\s`&<>"]+\.\w{1,6})[`&quot;"]?/gi,
+            /(?:в файле|in file|из файла|from file)\s+[`&quot;"]?([^\s`&<>"]+\.\w{1,6})[`&quot;"]?/gi,
+            /(?:файл|file)\s+[`]([^`]+\.\w{1,6})[`]/gi,
+            /[`]([^\s`]+[\/\\][^\s`]+\.\w{1,6})[`]/g,
+        ];
+
+        for (const pattern of filePatterns) {
+            pattern.lastIndex = 0;
+            const matches = [...ctx.matchAll(pattern)];
+            if (matches.length) {
+                file = matches[matches.length - 1][1];
+                break;
+            }
+        }
+
+        // Line RANGE patterns first: "строки 171-183", "lines 10-20", "строка: ~171-174"
+        const rangePatterns = [
+            /(?:строк[аи]?|lines?|line)\s*[:：]?\s*~?(\d+)\s*[-–—]\s*(\d+)/gi,
+            /\((?:строк[аи]?|lines?)\s+~?(\d+)\s*[-–—]\s*(\d+)\)/gi,
+        ];
+
+        for (const pattern of rangePatterns) {
+            pattern.lastIndex = 0;
+            const matches = [...ctx.matchAll(pattern)];
+            if (matches.length) {
+                const m = matches[matches.length - 1];
+                line = parseInt(m[1]);
+                lineEnd = parseInt(m[2]);
+                break;
+            }
+        }
+
+        // If no range found, try single line
+        if (!line) {
+            const singlePatterns = [
+                /(?:Строк[аи]?|Lines?|line|строк[аи]?)\s*[:：]?\s*~?(\d+)/gi,
+                /\((?:строк[аи]?|lines?|line)\s+~?(\d+)/gi,
+            ];
+            for (const pattern of singlePatterns) {
+                pattern.lastIndex = 0;
+                const matches = [...ctx.matchAll(pattern)];
+                if (matches.length) {
+                    line = parseInt(matches[matches.length - 1][1]);
+                    break;
+                }
+            }
+        }
+
+        return { file, line, lineEnd };
+    }
+
+    /**
+     * Detect if a code block contains a shell/terminal command (not programming code).
+     */
+    function isShellCommand(lang, code) {
+        const shellLangs = ['bash', 'sh', 'shell', 'cmd', 'powershell', 'bat', 'zsh', 'terminal', 'console'];
+        if (lang && shellLangs.includes(lang.toLowerCase())) return true;
+
+        const trimmed = code.trim();
+        const lines = trimmed.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+        if (lines.length === 0 || lines.length > 5) return false;
+
+        const cmdPrefixes = [
+            'npm ', 'npx ', 'pip ', 'pip3 ', 'python ', 'python3 ', 'node ',
+            'git ', 'cd ', 'rm ', 'del ', 'mkdir ', 'ls ', 'dir ', 'cat ',
+            'docker ', 'yarn ', 'pnpm ', 'cargo ', 'go ', 'make ', 'cmake ',
+            'apt ', 'brew ', 'choco ', 'curl ', 'wget ', './', 'sudo ',
+            'cp ', 'mv ', 'touch ', 'echo ', 'export ', 'set ', 'source ',
+        ];
+        return lines.every(l => {
+            const lt = l.trim().replace(/^\$\s*/, '');
+            return cmdPrefixes.some(p => lt.startsWith(p)) || lt.startsWith('./');
+        });
+    }
+
     function renderMarkdown(text) {
         if (!text) return '';
-        
-        // Убираем артефакты модели перед рендерингом
+
+        // Убираем артефакты модели — control tokens
         text = text.replace(/<\|(?:system|user|assistant|end|im_start|im_end|endoftext)\|>/g, '');
         text = text.replace(/<\/?(?:system|user|assistant)>/g, '');
-        // Убираем повторные "Question:" блоки
+
+        // Убираем эхо промпта: bare "user\n...\nassistant" blocks
+        text = text.replace(/(?:^|\n)user\n[\s\S]*?\nassistant(?:\n|$)/g, '\n');
+        // Bare "user" / "assistant" on own line (leftovers from template tokens)
+        text = text.replace(/^(?:user|assistant|system)\s*$/gm, '');
+
         const qMatch = text.search(/\n(?:Question|## Question|Вопрос):\s/);
         if (qMatch > text.length * 0.5 && qMatch > 100) {
             text = text.substring(0, qMatch);
         }
-        
+
         const esc = escHtml(text);
-        
+
         let result = '';
         let remaining = esc;
 
@@ -584,24 +865,40 @@
             const idx = remaining.indexOf('```');
             if (idx === -1) { result += processInline(remaining); break; }
 
-            result += processInline(remaining.slice(0, idx));
+            const textBefore = remaining.slice(0, idx);
+            result += processInline(textBefore);
+
             const after = remaining.slice(idx + 3);
             const nl = after.indexOf('\n');
             let lang = '', code = after;
             if (nl !== -1 && nl < 20) { lang = after.slice(0, nl).trim(); code = after.slice(nl + 1); }
 
-            const end = code.indexOf('```');
-            if (end === -1) { result += `<pre><code class="language-${lang}">${code}</code></pre>`; break; }
+            // Extract file/line hints from text before code block
+            const hints = extractFileLineHints(textBefore);
+            const dataAttrs = [];
+            if (hints.file) dataAttrs.push(`data-file="${hints.file}"`);
+            if (hints.line) dataAttrs.push(`data-line="${hints.line}"`);
+            if (hints.lineEnd) dataAttrs.push(`data-line-end="${hints.lineEnd}"`);
+            if (lang) dataAttrs.push(`data-lang="${lang}"`);
+            const attrStr = dataAttrs.length ? ' ' + dataAttrs.join(' ') : '';
 
-            result += `<pre><code class="language-${lang}">${code.slice(0, end)}</code></pre>`;
+            const end = code.indexOf('```');
+            if (end === -1) {
+                result += `<pre${attrStr}><code class="language-${lang}">${code}</code></pre>`;
+                break;
+            }
+
+            result += `<pre${attrStr}><code class="language-${lang}">${code.slice(0, end)}</code></pre>`;
             remaining = code.slice(end + 3);
         }
         return result;
     }
 
     function processInline(text) {
-        // Handle tables FIRST (before other processing)
         text = processTable(text);
+
+        // Horizontal rules: --- or *** or ___ on their own line (BEFORE other processing)
+        text = text.replace(/^[\t ]*[-*_]{3,}[\t ]*$/gm, '<hr>');
 
         const parts = text.split('`');
         let out = '';
@@ -615,12 +912,15 @@
         text = text.replace(/^# (.+)$/gm, '<h1>$1</h1>');
         text = text.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
         text = text.replace(/(<li>.*<\/li>)+/gs, '<ul>$&</ul>');
+        // Convert newlines to <br>, but skip lines that are already block-level HTML
         text = text.replace(/\n/g, '<br>');
+        // Clean up <br> right before/after block elements
+        text = text.replace(/<br>\s*(<(?:h[1-4]|hr|ul|li|table|div|details))/g, '$1');
+        text = text.replace(/(<\/(?:h[1-4]|hr|ul|li|table|div|details)>)\s*<br>/g, '$1');
         return text;
     }
 
     function processTable(text) {
-        // Detect markdown tables and convert to HTML
         const lines = text.split('\n');
         let result = [];
         let tableLines = [];
@@ -640,7 +940,6 @@
                     tableLines = [];
                     inTable = false;
                 } else if (inTable) {
-                    // Not enough lines for a table
                     result.push(...tableLines);
                     tableLines = [];
                     inTable = false;
@@ -667,7 +966,6 @@
         rows.forEach((row, idx) => {
             const cells = row.split('|').filter((c, i, arr) => i > 0 && i < arr.length - 1);
             const tag = idx === 0 ? 'th' : 'td';
-            const rowTag = idx === 0 ? 'thead' : (idx === 1 ? 'tbody' : '');
 
             if (idx === 0) html += '<thead>';
             if (idx === 1) html += '<tbody>';
@@ -709,7 +1007,34 @@
 
         switch (msg.type) {
 
+            // ── Streaming events (new!) ──
+            case 'streamStatus':
+                showStreamProgress(msg.content);
+                break;
+
+            case 'streamThinking':
+                addStreamThinking(msg.content);
+                break;
+
+            case 'streamAgentStart':
+                showStreamProgress(`⚡ ${msg.agents ? msg.agents.join(' → ') : 'агент'} работает...`);
+                break;
+
+            case 'streamToolCall':
+                addStreamToolCall(msg.tool, msg.args);
+                break;
+
+            case 'streamToolResult':
+                addStreamToolResult(msg.tool, msg.success, msg.output);
+                break;
+
+            case 'streamAgentDone':
+                // Will be followed by chatResponse
+                break;
+
+            // ── Final response ──
             case 'chatResponse':
+                removeStreamProgress();
                 removeTyping();
                 isLoading = false;
                 sendBtn.disabled = false;
@@ -722,12 +1047,13 @@
                     references: msg.references,
                     agent_trace: msg.agent_trace,
                     thinking: msg.thinking || '',
+                    file_changes: msg.file_changes || [],
                 });
                 break;
 
             case 'streamToken':
-                // Streaming token by token
                 removeTyping();
+                removeStreamProgress();
                 let streamEl = document.getElementById('streaming-bubble');
                 if (!streamEl) {
                     const wrapper = document.createElement('div');
@@ -740,7 +1066,6 @@
                     chatArea.appendChild(wrapper);
                 }
                 streamEl = document.getElementById('streaming-bubble');
-                // Append token before cursor
                 const cursor = streamEl.querySelector('.streaming-cursor');
                 if (cursor) {
                     const tokenSpan = document.createTextNode(msg.content);
@@ -750,7 +1075,6 @@
                 break;
 
             case 'streamEnd':
-                // Finalize streaming
                 const streamBubble = document.getElementById('streaming-bubble');
                 if (streamBubble) {
                     const rawText = streamBubble.textContent;
@@ -766,6 +1090,7 @@
                 break;
 
             case 'error':
+                removeStreamProgress();
                 removeTyping();
                 isLoading = false;
                 sendBtn.disabled = false;
@@ -784,7 +1109,6 @@
                     activeModelName.textContent = active.name;
                     setStatus('online', 'готов');
                 } else {
-                    // Check if engine has a model (custom model case)
                     if (llm_engine_loaded) {
                         setStatus('online', 'готов');
                     } else {
@@ -888,7 +1212,7 @@
         }
     });
 
-    // Track model loaded state for custom models
+    // Track model loaded state
     let llm_engine_loaded = false;
     window.addEventListener('message', e => {
         if (e.data.type === 'modelLoaded') llm_engine_loaded = true;

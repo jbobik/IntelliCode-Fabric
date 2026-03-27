@@ -1,6 +1,9 @@
 """
-Refactor Agent v3 — рефакторит код с применением паттернов проектирования.
-Теперь с поддержкой lang_instruction.
+Refactor Agent v4 — рефакторит код с применением паттернов проектирования.
+
+Улучшения v4:
+- НЕ удаляет <think> теги — orchestrator извлечёт и покажет в UI
+- lang_instruction для ответов на языке пользователя
 """
 
 import re
@@ -10,23 +13,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _strip_think(text: str) -> str:
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(r"</?think>", "", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
 class RefactorAgent:
     def __init__(self, llm):
         self.llm = llm
-
-    async def analyze(self, question, context, history=None, lang_instruction=""):
-        from .orchestrator import sanitize_response  # добавить импорт
-        prompt = self._build_prompt(question, context, history or [], lang_instruction)
-        response = await self.llm.generate(prompt)
-        response = _strip_think(response)
-        response = sanitize_response(response)  # ← ДОБАВИТЬ
-        references = self._extract_references(response)
-        return {"response": response, "references": references}
 
     async def refactor(self, code: str, instruction: str,
                        context: str = "", pattern: Optional[str] = None,
@@ -48,8 +37,7 @@ class RefactorAgent:
 
         prompt = (
             "<|system|>\n"
-            "You are an expert software architect and refactoring specialist.\n"
-            "CRITICAL: Do NOT output <think> tags or internal reasoning. Output only your final refactored code and explanation.\n\n"
+            "You are an expert software architect and refactoring specialist.\n\n"
             f"{lang_instruction}\n\n"
             "Rules:\n"
             "1. Preserve the original functionality exactly\n"
@@ -74,9 +62,11 @@ class RefactorAgent:
         prompt += "<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
-        response = _strip_think(response)
+        # НЕ strip_think — orchestrator извлечёт thinking
 
-        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', response, re.DOTALL)
+        # Извлекаем рефакторенный код (очищаем think для парсинга)
+        clean_for_parse = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', clean_for_parse, re.DOTALL)
         refactored_code = code_blocks[0].strip() if code_blocks else None
 
         return {

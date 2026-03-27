@@ -574,8 +574,9 @@ html, body {
     text-transform: uppercase;
     padding: 2px 7px;
     border-radius: 10px;
-    margin-bottom: 4px;
-    display: inline-block;
+    margin-bottom: 8px;
+    display: block;
+    width: fit-content;
 }
 .agent-analyst { background: rgba(63,185,80,0.12); color: var(--green); border: 1px solid rgba(63,185,80,0.25); }
 .agent-coder { background: rgba(88,166,255,0.12); color: var(--accent); border: 1px solid rgba(88,166,255,0.25); }
@@ -605,22 +606,7 @@ html, body {
 }
 .msg pre code { background: none; padding: 0; color: inherit; }
 
-.copy-code-btn {
-    position: absolute;
-    top: 4px; right: 4px;
-    padding: 2px 7px;
-    font-size: 9px;
-    font-weight: 700;
-    background: var(--border);
-    color: var(--text-dim);
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s;
-    font-family: inherit;
-}
-.msg pre:hover .copy-code-btn { opacity: 1; }
+/* copy-code-btn styles moved to PER-CODE-BLOCK BUTTONS section below */
 
 .code-actions { display: flex; gap: 4px; margin-top: 5px; }
 .code-action-btn {
@@ -745,6 +731,11 @@ html, body {
 .msg strong { font-weight: 700; color: var(--text); }
 .msg em { color: var(--text-dim); font-style: italic; }
 .msg a { color: var(--accent); }
+.msg hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 10px 0;
+}
 
 /* Scrollbar global */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
@@ -843,19 +834,11 @@ details.thinking-block[open] .thinking-summary::before {
 }
 
 /* ═══ PER-CODE-BLOCK BUTTONS ═══ */
-.pre-btn-row {
+/* Copy button — top right, absolute inside <pre> */
+.copy-code-btn {
     position: absolute;
     top: 4px;
     right: 4px;
-    display: flex;
-    gap: 3px;
-    opacity: 0;
-    transition: opacity 0.15s;
-}
-.msg pre:hover .pre-btn-row { opacity: 1; }
-
-.insert-code-btn,
-.copy-code-btn {
     padding: 2px 7px;
     font-size: 9px;
     font-weight: 700;
@@ -865,18 +848,47 @@ details.thinking-block[open] .thinking-summary::before {
     border-radius: 3px;
     cursor: pointer;
     font-family: inherit;
+    opacity: 0;
     transition: all 0.15s;
 }
-.insert-code-btn {
-    background: rgba(88,166,255,0.2);
-    color: var(--accent);
-}
-.insert-code-btn:hover {
-    background: rgba(88,166,255,0.35);
-}
+.msg pre:hover .copy-code-btn { opacity: 1; }
 .copy-code-btn:hover {
     background: var(--border-active);
     color: var(--text);
+}
+
+/* Insert button — bottom bar below code block */
+.insert-bar {
+    display: flex;
+    gap: 4px;
+    margin-top: -2px;
+    margin-bottom: 6px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.msg pre:hover + .insert-bar,
+.insert-bar:hover { opacity: 1; }
+
+.insert-code-btn {
+    padding: 3px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(88,166,255,0.12);
+    color: var(--accent);
+    border: 1px solid rgba(88,166,255,0.25);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.insert-code-btn:hover {
+    background: rgba(88,166,255,0.25);
+    border-color: var(--accent);
+}
+.insert-code-btn .insert-file-hint {
+    font-size: 9px;
+    color: var(--text-muted);
+    margin-left: 4px;
 }
 
 /* ═══ EXTENDED FINE-TUNE PARAMS ═══ */
@@ -922,4 +934,162 @@ details.thinking-block[open] .thinking-summary::before {
 .badge-custom {
     background: rgba(255,166,87,0.15);
     color: var(--orange);
+}
+
+/* ═══ STREAMING PROGRESS PANEL ═══ */
+.stream-progress {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin: 6px 0;
+    animation: msgIn 0.15s ease;
+}
+
+.stream-progress-inner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stream-progress-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.stream-progress-text {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 500;
+}
+
+/* Tool call display */
+.stream-tool-call {
+    margin-top: 6px;
+    padding: 4px 8px;
+    background: rgba(88,166,255,0.06);
+    border: 1px solid rgba(88,166,255,0.15);
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text-dim);
+    animation: msgIn 0.1s ease;
+}
+
+.tool-name {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.tool-arg-key {
+    color: var(--purple);
+}
+
+.stream-tool-result {
+    margin-top: 3px;
+    padding: 3px 8px;
+    font-size: 9px;
+    font-family: var(--mono);
+    border-radius: 3px;
+    color: var(--text-muted);
+    background: var(--bg3);
+    max-height: 60px;
+    overflow: hidden;
+    animation: msgIn 0.1s ease;
+}
+
+.stream-tool-result.success { border-left: 2px solid var(--green); }
+.stream-tool-result.error { border-left: 2px solid var(--red); color: var(--red); }
+
+/* Live thinking in stream */
+.stream-thinking {
+    margin-top: 6px;
+}
+
+/* ═══ FILE CHANGES SECTION ═══ */
+.file-changes-section {
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: rgba(63,185,80,0.06);
+    border: 1px solid rgba(63,185,80,0.15);
+    border-radius: var(--radius);
+}
+
+.file-changes-header {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--green);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.file-change-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    font-size: 11px;
+}
+
+.file-change-icon {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.file-change-path {
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: none;
+    font-family: var(--mono);
+    font-size: 10px;
+}
+
+.file-change-path:hover {
+    text-decoration: underline;
+}
+
+/* ═══ IMPROVED INSERT BUTTON STATES ═══ */
+.insert-code-btn.inserted {
+    background: rgba(63,185,80,0.3) !important;
+    color: var(--green) !important;
+}
+
+/* ═══ EXECUTE COMMAND BUTTON ═══ */
+.exec-cmd-btn {
+    padding: 3px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(63,185,80,0.12);
+    color: var(--green);
+    border: 1px solid rgba(63,185,80,0.25);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.exec-cmd-btn:hover {
+    background: rgba(63,185,80,0.25);
+    border-color: var(--green);
+}
+.exec-cmd-btn.executed {
+    background: rgba(63,185,80,0.3) !important;
+    color: var(--green) !important;
+}
+
+/* ═══ REACT AGENT TAG ═══ */
+.agent-react {
+    background: rgba(255,166,87,0.12);
+    color: var(--orange);
+    border: 1px solid rgba(255,166,87,0.25);
 }

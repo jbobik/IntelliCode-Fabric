@@ -1,100 +1,32 @@
 """
-Multi-Agent Orchestrator — настоящая агентная система v3.0
+Multi-Agent Orchestrator v4.0 — НАСТОЯЩАЯ мультиагентная система
 
-Ключевые улучшения:
-1. Настоящий ReAct-паттерн с итеративными шагами (Reason → Act → Observe → Repeat)
-2. Автоматическое определение языка пользователя → ответ на том же языке
-3. Thinking-блоки сохраняются отдельно для отображения в UI
-4. Агенты имеют инструменты и могут вызывать друг друга
-5. Reflection с реальной валидацией качества
-6. Explain-режим теперь предлагает исправления кода, а не только описывает проблемы
-7. Параллельный запуск независимых агентов
+Ключевые отличия от v3:
+1. Реальный ReAct-цикл с итеративными tool calls (до MAX_REACT_STEPS)
+2. Агенты имеют настоящие инструменты: read_file, write_file, edit_file, run_command, search_code
+3. Streaming: каждый шаг транслируется в реальном времени через callback
+4. Межагентная коммуникация: агенты передают контекст друг другу
+5. File change tracking: все изменения файлов трекаются и передаются в UI
+6. Автоматический язык ответа + thinking-блоки
 """
 
 import asyncio
 import json
 import logging
 import re
-from typing import Optional
+from typing import Optional, Callable, AsyncGenerator
 
 from .analyst import AnalystAgent
 from .coder import CoderAgent
 from .refactor import RefactorAgent
 from .tester import TesterAgent
+from .tools import AgentToolkit, ToolResult
+from .utils import strip_think_tags, detect_language, sanitize_response
 
 logger = logging.getLogger(__name__)
 
+MAX_REACT_STEPS = 8  # Максимум итераций ReAct-цикла
 
-# ─── Утилиты ────────────────────────────────────────────────────────────────
-
-def strip_think_tags(text: str) -> tuple[str, str]:
-    """
-    Извлекает <think>...</think> блоки из ответов моделей (Qwen3, DeepSeek-R1).
-    Возвращает (cleaned_text, thinking_text).
-    """
-    thinking_parts = []
-    for match in re.finditer(r"<think>(.*?)</think>", text, flags=re.DOTALL):
-        thinking_parts.append(match.group(1).strip())
-
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(r"</?think>", "", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
-    thinking = "\n\n".join(thinking_parts) if thinking_parts else ""
-    return cleaned, thinking
-
-
-def detect_language(text: str) -> str:
-    """
-    Определяет язык запроса пользователя.
-    Возвращает 'ru' для русского, 'en' для английского.
-    """
-    cyrillic_count = len(re.findall(r'[а-яА-ЯёЁ]', text))
-    latin_count = len(re.findall(r'[a-zA-Z]', text))
-    total = cyrillic_count + latin_count
-    if total == 0:
-        return 'ru'  # default
-    return 'ru' if cyrillic_count / total > 0.3 else 'en'
-
-def sanitize_response(text: str) -> str:
-    """
-    Убирает артефакты генерации: управляющие токены, незакрытые теги,
-    повторные вопросы, которые модель генерирует после ответа.
-    """
-    import re
-    
-    # Убираем все управляющие токены чат-шаблонов
-    control_patterns = [
-        r'<\|system\|>.*?<\|end\|>',
-        r'<\|user\|>.*?<\|end\|>',
-        r'<\|assistant\|>',
-        r'<\|end\|>',
-        r'<\|im_start\|>.*?<\|im_end\|>',
-        r'<\|im_start\|>',
-        r'<\|im_end\|>',
-        r'<\|endoftext\|>',
-        r'</?(?:system|user|assistant)>',
-    ]
-    
-    for pattern in control_patterns:
-        text = re.sub(pattern, '', text, flags=re.DOTALL)
-    
-    # Убираем <think> блоки (если не убрались раньше)
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'</?think>', '', text)
-    
-    # Убираем повторные "Question:" блоки в конце ответа
-    # (модель иногда генерирует новый вопрос после ответа)
-    question_restart = re.search(
-        r'\n(?:Question|## Question|Вопрос|<\|user\|>):\s', text
-    )
-    if question_restart and question_restart.start() > len(text) * 0.5:
-        text = text[:question_restart.start()]
-    
-    # Чистим множественные пустые строки
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    return text.strip()
 
 # ─── IT-фильтр ──────────────────────────────────────────────────────────────
 
@@ -141,21 +73,13 @@ OFFTOPIC_KEYWORDS = [
 OFFTOPIC_RESPONSE_RU = (
     "Я специализируюсь исключительно на разработке программного обеспечения и технических вопросах. "
     "Пожалуйста, задайте вопрос, связанный с кодом, архитектурой, отладкой, тестированием "
-    "или другими аспектами разработки. Например:\n\n"
-    "• «Где в проекте реализована аутентификация?»\n"
-    "• «Напиши unit-тесты для этого класса»\n"
-    "• «Объясни, как работает этот алгоритм»\n"
-    "• «Отрефактори этот код с паттерном Strategy»"
+    "или другими аспектами разработки."
 )
 
 OFFTOPIC_RESPONSE_EN = (
     "I specialize exclusively in software development and technical questions. "
     "Please ask a question related to code, architecture, debugging, testing "
-    "or other aspects of development. For example:\n\n"
-    "• 'Where is authentication implemented in the project?'\n"
-    "• 'Write unit tests for this class'\n"
-    "• 'Explain how this algorithm works'\n"
-    "• 'Refactor this code using the Strategy pattern'"
+    "or other aspects of development."
 )
 
 
@@ -171,44 +95,74 @@ def is_it_related(message: str) -> bool:
     return True
 
 
-# ─── Агентные инструменты ────────────────────────────────────────────────────
+# ─── Парсинг tool calls из ответа LLM ───────────────────────────────────────
 
-class AgentTool:
-    """Описание инструмента, доступного агенту"""
-    def __init__(self, name: str, description: str, fn):
-        self.name = name
-        self.description = description
-        self.fn = fn
+def parse_tool_calls(text: str) -> list[dict]:
+    """
+    Извлекает вызовы инструментов из ответа LLM.
+    Формат: ```tool\n{"tool": "name", "args": {...}}\n```
+    """
+    calls = []
 
-    async def call(self, **kwargs):
-        return await self.fn(**kwargs)
+    # Формат 1: ```tool ... ```
+    for match in re.finditer(r'```tool\s*\n(.*?)```', text, re.DOTALL):
+        try:
+            data = json.loads(match.group(1).strip())
+            if "tool" in data:
+                calls.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Формат 2: <tool>...</tool>
+    for match in re.finditer(r'<tool>(.*?)</tool>', text, re.DOTALL):
+        try:
+            data = json.loads(match.group(1).strip())
+            if "tool" in data:
+                calls.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Формат 3: TOOL_CALL: {...}
+    for match in re.finditer(r'TOOL_CALL:\s*(\{.*?\})', text, re.DOTALL):
+        try:
+            data = json.loads(match.group(1))
+            if "tool" in data:
+                calls.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    return calls
+
+
+def strip_tool_calls(text: str) -> str:
+    """Убирает блоки вызовов инструментов из ответа"""
+    text = re.sub(r'```tool\s*\n.*?```', '', text, flags=re.DOTALL)
+    text = re.sub(r'<tool>.*?</tool>', '', text, flags=re.DOTALL)
+    text = re.sub(r'TOOL_CALL:\s*\{.*?\}', '', text, flags=re.DOTALL)
+    return text.strip()
 
 
 # ─── Настоящая мультиагентная система ─────────────────────────────────────────
 
 class AgentOrchestrator:
     """
-    Мультиагентная система на основе ReAct-паттерна v3.
+    Мультиагентная система v4.0 с настоящим ReAct-циклом и инструментами.
 
-    ReAct = Reasoning + Acting:
-    1. REASON: агент анализирует запрос и составляет план
-    2. ACT: вызывает нужные инструменты (RAG, specialist agents)
-    3. OBSERVE: получает результаты инструментов
-    4. REASON again: синтезирует финальный ответ
-    5. REFLECT: проверяет качество и при необходимости улучшает
-
-    Ключевые отличия от v2:
-    - Автоматическое определение языка → ответ на том же языке
-    - Thinking-блоки сохраняются для UI
-    - Explain предлагает исправления, а не только описывает проблемы
-    - Параллельный запуск агентов когда это возможно
-    - Лучшая reflection с реальной проверкой
+    Цикл:
+    1. PLAN: определить intent и выбрать агентов
+    2. REACT LOOP (до MAX_REACT_STEPS итераций):
+       a. REASON: агент анализирует запрос + контекст + результаты прошлых инструментов
+       b. ACT: если нужно — вызвать инструменты (read_file, write_file, run_command, etc.)
+       c. OBSERVE: получить результаты инструментов, добавить в контекст
+       d. Повторить или завершить
+    3. REFLECT: санитизация, проверка качества, языковая проверка
     """
 
     def __init__(self, llm, rag_engine, config: dict):
         self.llm = llm
         self.rag = rag_engine
         self.config = config
+        self.toolkit = AgentToolkit()
 
         # Специализированные агенты
         self.analyst = AnalystAgent(llm)
@@ -216,7 +170,7 @@ class AgentOrchestrator:
         self.refactor_agent = RefactorAgent(llm)
         self.tester = TesterAgent(llm)
 
-        logger.info("AgentOrchestrator v3 initialized (ReAct + language-aware)")
+        logger.info("AgentOrchestrator v4 initialized (ReAct + Tools + Streaming)")
 
     # ─── Главная точка входа ─────────────────────────────────────────────
 
@@ -226,9 +180,35 @@ class AgentOrchestrator:
         context_file: Optional[str] = None,
         selected_code: Optional[str] = None,
         conversation_history: list = None,
+        stream_callback: Optional[Callable] = None,
+        platform: Optional[str] = None,
     ) -> dict:
+        """
+        stream_callback(event_type, data) — для real-time streaming в UI.
+        event_types: 'thinking', 'agent_start', 'agent_done', 'tool_call',
+                     'tool_result', 'token', 'status'
+        """
         if conversation_history is None:
             conversation_history = []
+
+        self.platform = platform or "unknown"
+
+        # Callback helper
+        async def emit(event_type: str, data: any = None):
+            if stream_callback:
+                await stream_callback(event_type, data)
+
+        # Устанавливаем workspace
+        if context_file:
+            from pathlib import Path
+            cf = Path(context_file)
+            for parent in cf.parents:
+                if (parent / ".git").exists() or (parent / "package.json").exists() or (parent / "pyproject.toml").exists():
+                    self.toolkit.set_workspace(str(parent))
+                    break
+            else:
+                if cf.parent.exists():
+                    self.toolkit.set_workspace(str(cf.parent))
 
         # Определяем язык пользователя
         user_lang = detect_language(message)
@@ -242,9 +222,11 @@ class AgentOrchestrator:
                 "intent": "offtopic",
                 "references": [],
                 "thinking": "",
+                "file_changes": [],
             }
 
         # ── Шаг 1: RAG — собираем контекст проекта ──
+        await emit("status", "Ищу релевантный контекст в проекте...")
         context_chunks = await self.rag.retrieve(message, top_k=5)
         context_text = self._format_context(context_chunks)
 
@@ -256,22 +238,40 @@ class AgentOrchestrator:
 
         logger.info(f"RAG retrieved {len(context_chunks)} chunks for: {message[:60]}...")
 
-        # ── Шаг 2: Planning — агент составляет план ──
-        plan = await self._plan(message, context_text, selected_code, conversation_history)
-        logger.info(f"Agent plan: intent={plan['intent']}, agents={plan['agents']}")
+        # ── Шаг 1.5: Дочитываем файлы, упомянутые в запросе ──
+        context_text = await self._read_mentioned_files(message, context_text)
 
-        # ── Шаг 3: Execution — выполняем план ──
+        # ── Шаг 2: Planning — агент составляет план ──
+        await emit("status", "Планирую выполнение запроса...")
+        plan = await self._plan(message, context_text, selected_code, conversation_history)
+
+        # Force tools for intents that need file access
+        file_action_keywords = [
+            "создай файл", "create file", "удали", "delete", "remove", "rm ",
+            "запусти", "выполни", "run", "execute", "install",
+            "рефактор", "refactor", "перепиши", "rewrite",
+        ]
+        if any(kw in message.lower() for kw in file_action_keywords):
+            plan["needs_tools"] = True
+
+        logger.info(f"Agent plan: intent={plan['intent']}, agents={plan['agents']}, tools={plan.get('needs_tools')}")
+        await emit("agent_start", {"intent": plan["intent"], "agents": plan["agents"]})
+
+        # ── Шаг 3: Execution с ReAct-циклом ──
         result = await self._execute_plan(
             plan, message, context_text, selected_code,
-            conversation_history, user_lang
+            conversation_history, user_lang, emit
         )
 
-        # ── Шаг 4: Reflection — проверяем качество ответа ──
+        # ── Шаг 4: Reflection ──
         result = await self._reflect(result, message, context_text, user_lang)
 
-        # Добавляем метаданные RAG
+        # Добавляем метаданные
         result["references"] = [c["metadata"]["file_path"] for c in context_chunks]
         result["rag_chunks"] = len(context_chunks)
+        result["file_changes"] = self.toolkit.get_changes_summary()
+
+        await emit("agent_done", {"agent": result.get("agent"), "intent": result.get("intent")})
 
         return result
 
@@ -290,24 +290,27 @@ class AgentOrchestrator:
                         selected_code: Optional[str], history: list) -> dict:
         has_code = bool(selected_code)
         has_context = bool(context.strip())
-        recent_history = history[-3:] if history else []
 
         planning_prompt = f"""<|system|>
 You are a planning agent for a code assistant. Analyze the user's request and determine the best action plan.
 
 Available agents:
 - analyst: answers questions about code, finds implementations, explains architecture
-- coder: generates new code, implements functions, creates endpoints
+- coder: generates new code, implements functions, creates endpoints, creates/edits files
 - refactor: refactors existing code, applies design patterns, improves quality
 - tester: generates unit tests, integration tests, test fixtures
 - multi: use multiple agents in sequence (analyst+coder, analyst+tester, etc.)
 
-Respond with ONLY a JSON object in this exact format:
+The agents have access to tools: read_file, write_file, edit_file, run_command, search_code, list_files.
+If the request involves creating/modifying files or running commands, include "coder" in agents and set needs_tools=true.
+
+Respond with ONLY a JSON object:
 {{
   "intent": "analyze|generate|refactor|test|explain|review|multi",
   "agents": ["analyst"],
   "reasoning": "brief reason",
   "needs_code": true/false,
+  "needs_tools": true/false,
   "confidence": 0.0-1.0
 }}
 <|end|>
@@ -346,6 +349,7 @@ Has project context: {has_context}
                     "solid", "dry", "kiss", "упрости", "simplify",
                 ],
                 "agents": ["refactor"],
+                "needs_tools": True,
             },
             "test": {
                 "keywords": [
@@ -354,21 +358,25 @@ Has project context: {has_context}
                     "проверк", "verify", "тестирование",
                 ],
                 "agents": ["analyst", "tester"],
+                "needs_tools": True,
             },
             "generate": {
                 "keywords": [
                     "generate", "сгенерируй", "create", "создай", "implement", "реализуй",
                     "write", "напиши", "add", "добавь", "build", "make", "сделай",
                     "endpoint", "handler", "обработчик", "функцию", "класс",
+                    "создать файл", "создай файл", "новый файл",
                 ],
                 "agents": ["analyst", "coder"],
+                "needs_tools": True,
             },
             "review": {
                 "keywords": [
                     "review", "ревью", "code review", "проверь", "аудит", "audit",
                     "уязвимост", "vulnerability", "security", "безопасн",
                 ],
-                "agents": ["analyst", "coder"],
+                "agents": ["analyst"],
+                "needs_tools": True,
             },
             "analyze": {
                 "keywords": [
@@ -380,8 +388,32 @@ Has project context: {has_context}
                     "улучш", "improve", "предлож", "suggest",
                 ],
                 "agents": ["analyst"],
+                "needs_tools": True,
             },
         }
+
+        # Детект команд: если пользователь просит выполнить команду
+        cmd_keywords = ["запусти", "выполни", "run", "execute", "install", "npm", "pip", "python"]
+        if any(kw in msg for kw in cmd_keywords):
+            return {
+                "intent": "generate",
+                "agents": ["coder"],
+                "reasoning": "user wants to execute a command",
+                "needs_tools": True,
+                "confidence": 0.9,
+            }
+
+        # Детект создания/редактирования файлов
+        file_keywords = ["создай файл", "создать файл", "create file", "write file",
+                         "edit file", "modify file", "изменить файл", "отредактируй"]
+        if any(kw in msg for kw in file_keywords):
+            return {
+                "intent": "generate",
+                "agents": ["coder"],
+                "reasoning": "user wants to create/edit files",
+                "needs_tools": True,
+                "confidence": 0.9,
+            }
 
         scores = {}
         for intent, data in patterns.items():
@@ -404,6 +436,7 @@ Has project context: {has_context}
             "intent": best_intent,
             "agents": patterns[best_intent]["agents"],
             "reasoning": f"matched {scores[best_intent]} keywords",
+            "needs_tools": patterns[best_intent].get("needs_tools", False),
             "confidence": confidence,
         }
 
@@ -412,9 +445,11 @@ Has project context: {has_context}
     async def _execute_plan(
         self, plan: dict, message: str, context: str,
         selected_code: Optional[str], history: list, user_lang: str,
+        emit: Callable,
     ) -> dict:
         intent = plan.get("intent", "general")
         agents = plan.get("agents", ["analyst"])
+        needs_tools = plan.get("needs_tools", False)
 
         lang_instruction = (
             "CRITICAL: Отвечай ТОЛЬКО на русском языке. Весь текст, объяснения и комментарии — на русском."
@@ -422,38 +457,166 @@ Has project context: {has_context}
             "Respond in English."
         )
 
-        logger.info(f"Executing plan: intent={intent}, agents={agents}, lang={user_lang}")
+        logger.info(f"Executing plan: intent={intent}, agents={agents}, lang={user_lang}, tools={needs_tools}")
 
+        # Если нужны инструменты — запускаем ReAct-цикл
+        if needs_tools:
+            return await self._react_loop(
+                message, context, selected_code, history,
+                lang_instruction, agents, intent, emit
+            )
+
+        # Иначе — стандартное выполнение через агентов
         if intent == "refactor":
-            return await self._execute_refactor(message, context, selected_code, history, lang_instruction)
+            return await self._execute_refactor(message, context, selected_code, history, lang_instruction, emit)
         elif intent == "test":
-            return await self._execute_test_pipeline(message, context, selected_code, history, lang_instruction)
+            return await self._execute_test_pipeline(message, context, selected_code, history, lang_instruction, emit)
         elif intent == "generate":
-            return await self._execute_generate_pipeline(message, context, selected_code, history, lang_instruction)
+            return await self._execute_generate_pipeline(message, context, selected_code, history, lang_instruction, emit)
         elif intent in ("analyze", "explain"):
-            return await self._execute_analysis(message, context, selected_code, history, lang_instruction)
+            return await self._execute_analysis(message, context, selected_code, history, lang_instruction, emit)
         elif intent == "review":
-            return await self._execute_review(message, context, selected_code, history, lang_instruction)
+            return await self._execute_review(message, context, selected_code, history, lang_instruction, emit)
         elif intent == "multi":
-            return await self._execute_multi_agent(message, context, selected_code, history, agents, lang_instruction)
+            return await self._execute_multi_agent(message, context, selected_code, history, agents, lang_instruction, emit)
         else:
-            return await self._execute_general(message, context, selected_code, history, lang_instruction)
+            return await self._execute_general(message, context, selected_code, history, lang_instruction, emit)
 
-    async def _execute_analysis(self, message, context, selected_code, history, lang_instruction) -> dict:
-        logger.info("→ [ANALYST] Analyzing request")
+    # ─── ReAct Loop — настоящий цикл Reason→Act→Observe ──────────────
+
+    async def _react_loop(
+        self, message: str, context: str, selected_code: Optional[str],
+        history: list, lang_instruction: str, agents: list,
+        intent: str, emit: Callable,
+    ) -> dict:
+        """
+        Настоящий ReAct-цикл: LLM решает, какие инструменты вызвать,
+        получает результаты, и итерирует до завершения.
+        """
+        logger.info("→ [REACT] Starting ReAct loop with tools")
+        await emit("status", "🔧 Запускаю агентов с инструментами...")
+
+        tool_descriptions = self.toolkit.get_tools_description()
+        all_thinking = []
+        tool_trace = []
+
+        # Определяем платформу
+        platform_map = {"win32": "Windows", "linux": "Linux", "darwin": "macOS"}
+        platform_name = platform_map.get(getattr(self, 'platform', ''), 'Unknown')
+
+        # Формируем начальный промпт
+        system = (
+            f"You are an expert software engineer agent with access to real tools.\n"
+            f"{lang_instruction}\n\n"
+            f"IMPORTANT: You can use tools to read files, write files, edit files, run commands, and search code.\n"
+            f"The user is working on {platform_name}. Use platform-appropriate commands.\n"
+            f"Think step by step. Use tools when needed. When done, provide your final answer.\n\n"
+            f"CRITICAL RULES:\n"
+            f"1. ALWAYS start by using list_files to see the project structure.\n"
+            f"2. ALWAYS use read_file to read file contents BEFORE analyzing, reviewing, refactoring, or modifying them.\n"
+            f"3. Read ALL relevant files — do not guess or assume file contents.\n"
+            f"4. When the user asks about their project, use search_code and list_files to explore it thoroughly.\n"
+            f"5. When suggesting terminal commands, use the correct syntax for {platform_name}.\n\n"
+            f"{tool_descriptions}\n"
+        )
+
+        messages_context = f"<|system|>\n{system}\n<|end|>\n"
+
+        if context:
+            messages_context += f"<|user|>\n## Project Context:\n```\n{context[:3000]}\n```\n\n"
+        else:
+            messages_context += "<|user|>\n"
 
         if selected_code:
-            # Если есть код — объясняем И предлагаем улучшения
+            messages_context += f"## Selected Code:\n```\n{selected_code}\n```\n\n"
+
+        messages_context += f"## User Request: {message}\n<|end|>\n<|assistant|>"
+
+        accumulated_code = None
+
+        for step in range(MAX_REACT_STEPS):
+            logger.info(f"  [REACT step {step + 1}/{MAX_REACT_STEPS}]")
+            await emit("status", f"🤔 Шаг {step + 1}: Агент размышляет...")
+
+            # Генерируем ответ
+            response = await self.llm.generate(messages_context, max_new_tokens=2048)
+            response, thinking = strip_think_tags(response)
+
+            if thinking:
+                all_thinking.append(thinking)
+                await emit("thinking", thinking)
+
+            # Парсим tool calls
+            tool_calls = parse_tool_calls(response)
+
+            if not tool_calls:
+                # Нет tool calls — агент завершил работу
+                clean_response = strip_tool_calls(response)
+                logger.info(f"  [REACT] Agent finished after {step + 1} steps")
+
+                # Извлекаем код из ответа
+                code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', clean_response, re.DOTALL)
+                if code_blocks:
+                    accumulated_code = code_blocks[-1].strip()
+
+                return {
+                    "response": clean_response,
+                    "code": accumulated_code,
+                    "agent": agents[-1] if agents else "coder",
+                    "intent": intent,
+                    "agent_trace": ["react"] + tool_trace,
+                    "thinking": "\n\n".join(all_thinking),
+                }
+
+            # Выполняем tool calls
+            tool_results_text = ""
+            for tc in tool_calls:
+                tool_name = tc.get("tool", "unknown")
+                tool_args = tc.get("args", {})
+
+                await emit("tool_call", {"tool": tool_name, "args": tool_args})
+                logger.info(f"  [TOOL] {tool_name}({tool_args})")
+
+                result = await self.toolkit.execute_tool(tool_name, tool_args)
+                tool_trace.append(tool_name)
+
+                await emit("tool_result", {"tool": tool_name, "success": result.success, "output": result.output[:500]})
+                logger.info(f"  [TOOL RESULT] {result}")
+
+                tool_results_text += f"\n\n### Tool Result ({tool_name}):\n{result.output}\n"
+
+            # Добавляем результаты в контекст для следующей итерации
+            clean_response = strip_tool_calls(response)
+            messages_context += f"{clean_response}\n\n{tool_results_text}\n\nContinue. If you need more tools, call them. If done, provide your final answer without tool calls.\n<|end|>\n<|assistant|>"
+
+        # Если превышен лимит итераций
+        logger.warning(f"  [REACT] Max steps reached ({MAX_REACT_STEPS})")
+        return {
+            "response": strip_tool_calls(response) + "\n\n*⚠ Достигнут лимит итераций агента.*",
+            "code": accumulated_code,
+            "agent": "react",
+            "intent": intent,
+            "agent_trace": ["react"] + tool_trace,
+            "thinking": "\n\n".join(all_thinking),
+        }
+
+    # ─── Standard pipelines (улучшенные со streaming) ─────────────────
+
+    async def _execute_analysis(self, message, context, selected_code, history, lang_instruction, emit) -> dict:
+        logger.info("→ [ANALYST] Analyzing request")
+        await emit("status", "🔍 Аналитик изучает запрос...")
+
+        if selected_code:
             result = await self.analyst.explain_with_fixes(
-                code=selected_code,
-                question=message,
-                context=context,
-                lang_instruction=lang_instruction,
+                code=selected_code, question=message,
+                context=context, lang_instruction=lang_instruction,
             )
         else:
             result = await self.analyst.analyze(message, context, history, lang_instruction=lang_instruction)
 
         response, thinking = strip_think_tags(result["response"])
+        if thinking:
+            await emit("thinking", thinking)
 
         return {
             "response": response,
@@ -464,11 +627,11 @@ Has project context: {has_context}
             "thinking": thinking,
         }
 
-    async def _execute_generate_pipeline(self, message, context, selected_code, history, lang_instruction) -> dict:
+    async def _execute_generate_pipeline(self, message, context, selected_code, history, lang_instruction, emit) -> dict:
         logger.info("→ [ANALYST→CODER] Starting generation pipeline")
 
-        # Step 1: Analyst изучает контекст
-        logger.info("  [ANALYST] Analyzing requirements...")
+        # Step 1: Analyst
+        await emit("status", "🔍 Аналитик изучает требования...")
         analysis = await self.analyst.analyze(
             f"Analyze this code generation request and identify: "
             f"1) What needs to be created, "
@@ -478,17 +641,19 @@ Has project context: {has_context}
             context, history, lang_instruction=lang_instruction,
         )
         analysis_text, thinking1 = strip_think_tags(analysis["response"])
-        logger.info("  [ANALYST] Analysis complete")
+        if thinking1:
+            await emit("thinking", thinking1)
 
-        # Step 2: Coder генерирует код
-        logger.info("  [CODER] Generating code...")
+        # Step 2: Coder
+        await emit("status", "💻 Кодер генерирует код...")
         generated = await self.coder.generate(
             message=message, context=context,
             selected_code=selected_code, analysis=analysis_text,
             lang_instruction=lang_instruction,
         )
         response, thinking2 = strip_think_tags(generated["response"])
-        logger.info("  [CODER] Generation complete")
+        if thinking2:
+            await emit("thinking", thinking2)
 
         thinking = "\n\n".join(filter(None, [thinking1, thinking2]))
 
@@ -502,13 +667,14 @@ Has project context: {has_context}
             "thinking": thinking,
         }
 
-    async def _execute_refactor(self, message, context, selected_code, history, lang_instruction) -> dict:
+    async def _execute_refactor(self, message, context, selected_code, history, lang_instruction, emit) -> dict:
         logger.info("→ [REFACTOR] Starting refactoring")
+        await emit("status", "🔄 Рефакторинг...")
 
         code_to_refactor = selected_code or context or ""
 
         if not selected_code and not context:
-            logger.info("  [ANALYST] No code provided, searching...")
+            await emit("status", "🔍 Ищу код для рефакторинга...")
             search_result = await self.analyst.analyze(
                 f"Find the relevant code to refactor: {message}",
                 context, history, lang_instruction=lang_instruction,
@@ -521,6 +687,8 @@ Has project context: {has_context}
             context=context, lang_instruction=lang_instruction,
         )
         response, thinking = strip_think_tags(result["response"])
+        if thinking:
+            await emit("thinking", thinking)
 
         return {
             "response": response,
@@ -531,13 +699,13 @@ Has project context: {has_context}
             "thinking": thinking,
         }
 
-    async def _execute_test_pipeline(self, message, context, selected_code, history, lang_instruction) -> dict:
+    async def _execute_test_pipeline(self, message, context, selected_code, history, lang_instruction, emit) -> dict:
         logger.info("→ [ANALYST→TESTER] Starting test generation pipeline")
 
         code_to_test = selected_code or context or ""
 
         if not selected_code:
-            logger.info("  [ANALYST] Finding code to test...")
+            await emit("status", "🔍 Ищу код для тестирования...")
             analysis = await self.analyst.analyze(
                 f"Identify the code that needs to be tested: {message}",
                 context, history, lang_instruction=lang_instruction,
@@ -545,13 +713,14 @@ Has project context: {has_context}
             text, _ = strip_think_tags(analysis["response"])
             code_to_test = text
 
-        logger.info("  [TESTER] Generating tests...")
+        await emit("status", "🧪 Генерирую тесты...")
         result = await self.tester.generate_tests(
             code=code_to_test, instruction=message,
             context=context, lang_instruction=lang_instruction,
         )
         response, thinking = strip_think_tags(result["response"])
-        logger.info("  [TESTER] Tests generated")
+        if thinking:
+            await emit("thinking", thinking)
 
         return {
             "response": response,
@@ -562,41 +731,41 @@ Has project context: {has_context}
             "thinking": thinking,
         }
 
-    async def _execute_review(self, message, context, selected_code, history, lang_instruction) -> dict:
-        """
-        Code review pipeline: Analyst находит проблемы,
-        Coder предлагает исправления.
-        """
-        logger.info("→ [ANALYST→CODER] Code review pipeline")
+    async def _execute_review(self, message, context, selected_code, history, lang_instruction, emit) -> dict:
+        logger.info("→ [ANALYST] Code review")
+        await emit("status", "🔍 Провожу code review...")
 
         code_to_review = selected_code or context or ""
 
-        # Analyst — ревью
         review_result = await self.analyst.analyze(
             f"Conduct a detailed code review. For EACH issue found, describe the problem "
             f"AND provide a specific code fix. Request: {message}",
             code_to_review, history, lang_instruction=lang_instruction,
         )
         response, thinking = strip_think_tags(review_result["response"])
+        if thinking:
+            await emit("thinking", thinking)
 
         return {
             "response": response,
             "code": None,
             "agent": "analyst",
             "intent": "review",
-            "agent_trace": ["analyst", "coder"],
+            "agent_trace": ["analyst"],
             "thinking": thinking,
         }
 
-    async def _execute_multi_agent(self, message, context, selected_code, history, agents, lang_instruction) -> dict:
+    async def _execute_multi_agent(self, message, context, selected_code, history, agents, lang_instruction, emit) -> dict:
         logger.info(f"→ [MULTI-AGENT] Running agents: {agents}")
 
         accumulated_context = context
         last_response = None
         agent_trace = []
         all_thinking = []
+        result = {}
 
         for agent_name in agents:
+            await emit("status", f"⚙ Агент {agent_name} работает...")
             logger.info(f"  [{agent_name.upper()}] Processing...")
 
             if agent_name == "analyst":
@@ -638,6 +807,7 @@ Has project context: {has_context}
             agent_trace.append(agent_name)
             if thinking:
                 all_thinking.append(thinking)
+                await emit("thinking", thinking)
 
         return {
             "response": last_response or "Multi-agent pipeline completed",
@@ -648,14 +818,17 @@ Has project context: {has_context}
             "thinking": "\n\n".join(all_thinking),
         }
 
-    async def _execute_general(self, message, context, selected_code, history, lang_instruction) -> dict:
+    async def _execute_general(self, message, context, selected_code, history, lang_instruction, emit) -> dict:
         logger.info("→ [GENERAL] Direct analyst response")
+        await emit("status", "🤖 Обрабатываю запрос...")
 
         result = await self.analyst.analyze(
             message, context, history,
             lang_instruction=lang_instruction,
         )
         response, thinking = strip_think_tags(result["response"])
+        if thinking:
+            await emit("thinking", thinking)
 
         return {
             "response": response,
@@ -668,12 +841,12 @@ Has project context: {has_context}
     # ─── Reflection ──────────────────────────────────────────────────────
 
     async def _reflect(self, result: dict, original_message: str,
-                    context: str, user_lang: str) -> dict:
+                       context: str, user_lang: str) -> dict:
         response = result.get("response", "")
-        
-        # ── Санитизация: убираем артефакты генерации ──
-        response = sanitize_response(response)
-        
+
+        # Санитизация (preserve_think=False — thinking уже извлечён)
+        response = sanitize_response(response, preserve_think=False)
+
         # Проверки качества
         if len(response) < 20:
             logger.warning("Response too short, may indicate an issue")
@@ -696,13 +869,50 @@ Has project context: {has_context}
         if "thinking" not in result:
             result["thinking"] = ""
 
-        # Санитизируем thinking тоже
         if result["thinking"]:
-            result["thinking"] = sanitize_response(result["thinking"])
+            result["thinking"] = sanitize_response(result["thinking"], preserve_think=False)
+
+        if "file_changes" not in result:
+            result["file_changes"] = []
 
         return result
 
     # ─── Утилиты ─────────────────────────────────────────────────────────
+
+    async def _read_mentioned_files(self, message: str, context: str) -> str:
+        """
+        Reads files explicitly mentioned in the user's message and adds their
+        content to the context. This ensures agents can actually see file contents
+        even if RAG didn't retrieve them.
+        """
+        if not self.toolkit.workspace_root:
+            return context
+
+        # Extract file paths from message
+        mentioned = set()
+        patterns = [
+            r'(?:файл[еа]?\s+|file\s+)(\S+\.\w{1,6})',
+            r'(\S+\.(?:py|js|ts|tsx|jsx|java|cpp|go|rs|rb|php|css|scss|html|vue|svelte|json|yaml|yml|toml|md|sql|sh))\b',
+        ]
+        for pat in patterns:
+            for m in re.finditer(pat, message, re.IGNORECASE):
+                path = m.group(1).strip('`"\'')
+                if path and not path.startswith('http'):
+                    mentioned.add(path)
+
+        if not mentioned:
+            return context
+
+        additional = []
+        for file_path in mentioned:
+            result = await self.toolkit.execute_tool("read_file", {"path": file_path})
+            if result.success and result.output:
+                additional.append(f"\n\n// File: {file_path}\n{result.output[:4000]}")
+                logger.info(f"[ENRICH] Read mentioned file: {file_path} ({len(result.output)} chars)")
+
+        if additional:
+            return context + "\n".join(additional)
+        return context
 
     def _format_context(self, chunks: list) -> str:
         if not chunks:

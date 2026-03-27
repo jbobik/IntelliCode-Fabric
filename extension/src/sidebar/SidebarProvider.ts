@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
@@ -57,7 +58,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'getFtStatus':
                     await this._sendFtStatus();
                     break;
-                case 'insertCode': this._insertCode(msg.code, msg.targetFile); break;
+                case 'insertCode': this._insertCode(msg.code, msg.targetFile, msg.lineStart, msg.lineEnd); break;
+                case 'runCommand': this._runCommand(msg.command); break;
+                case 'applyAllChanges': await this._applyAllChanges(msg.changes); break;
+                case 'createFile': await this._createFile(msg.filePath, msg.content); break;
+                case 'openFile': await this._openFile(msg.filePath, msg.lineStart); break;
             }
         });
 
@@ -73,51 +78,280 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    // ─── Chat ─────────────────────────────────────────────────────────────────
+    // ─── Chat with SSE streaming ───────────────────────────────────────────
 
     private async _handleChat(message: any) {
+        const editor = vscode.window.activeTextEditor;
+        const selectedCode = editor?.selection.isEmpty ? undefined : editor?.document.getText(editor.selection);
+        const contextFile = editor?.document.fileName;
+
+        const body = JSON.stringify({
+            message: message.content,
+            selected_code: selectedCode,
+            context_file: contextFile,
+            conversation_history: message.history || [],
+            platform: process.platform,
+        });
+
+        // Сначала пробуем SSE streaming, если не получится — fallback на обычный /chat
         try {
-            const editor = vscode.window.activeTextEditor;
-            const selectedCode = editor?.selection.isEmpty ? undefined : editor?.document.getText(editor.selection);
-            const contextFile = editor?.document.fileName;
-
-            // Показываем статус "агент думает..."
-            this._view?.webview.postMessage({
-                type: 'status',
-                content: '🔍 Анализирую запрос и ищу контекст в проекте...',
-            });
-
-            const response = await fetch(`${this._serverUrl}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message.content,
-                    selected_code: selectedCode,
-                    context_file: contextFile,
-                    conversation_history: message.history || [],
-                }),
-            });
-
-            if (!response.ok) throw new Error(await response.text());
-            const result = (await response.json()) as any;
-
-            this._view?.webview.postMessage({
-                type: 'chatResponse',
-                content: result.response,
-                code: result.code,
-                agent: result.agent,
-                intent: result.intent,
-                references: result.references,
-                agent_trace: result.agent_trace || [],
-                rag_chunks: result.rag_chunks || 0,
-                thinking: result.thinking || '',
-            });
+            const streamOk = await this._handleChatSSE(body);
+            if (!streamOk) {
+                await this._handleChatFallback(body);
+            }
         } catch (error: any) {
             this._view?.webview.postMessage({
                 type: 'error',
                 content: `${error.message}. Запущен ли бэкенд? (cd backend && python server.py)`,
             });
         }
+    }
+
+    /**
+     * SSE streaming через http module (работает в Node.js окружении VS Code).
+     * Возвращает true если стриминг прошёл успешно, false если нужен fallback.
+     */
+    private _handleChatSSE(body: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            try {
+                const url = new URL(`${this._serverUrl}/chat/stream`);
+                const http = require('http');
+
+                const options = {
+                    hostname: url.hostname,
+                    port: url.port,
+                    path: url.pathname,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream',
+                        'Content-Length': Buffer.byteLength(body),
+                    },
+                };
+
+                const req = http.request(options, (res: any) => {
+                    if (res.statusCode !== 200) {
+                        resolve(false);
+                        return;
+                    }
+
+                    let buffer = '';
+                    let receivedFinalResult = false;
+
+                    res.setEncoding('utf8');
+
+                    res.on('data', (chunk: string) => {
+                        buffer += chunk;
+                        // Parse SSE events: split by double newline
+                        const parts = buffer.split('\n\n');
+                        buffer = parts.pop() || '';
+
+                        for (const part of parts) {
+                            const trimmed = part.trim();
+                            if (!trimmed.startsWith('data: ')) continue;
+                            try {
+                                const event = JSON.parse(trimmed.slice(6));
+                                this._handleStreamEvent(event);
+                                if (event.type === 'final_result' || event.type === 'error') {
+                                    receivedFinalResult = true;
+                                }
+                            } catch {}
+                        }
+                    });
+
+                    res.on('end', () => {
+                        // Process remaining buffer
+                        if (buffer.trim().startsWith('data: ')) {
+                            try {
+                                const event = JSON.parse(buffer.trim().slice(6));
+                                this._handleStreamEvent(event);
+                                if (event.type === 'final_result' || event.type === 'error') {
+                                    receivedFinalResult = true;
+                                }
+                            } catch {}
+                        }
+                        resolve(receivedFinalResult);
+                    });
+
+                    res.on('error', () => {
+                        resolve(false);
+                    });
+                });
+
+                req.on('error', () => {
+                    resolve(false);
+                });
+
+                // No timeout — LLM generation can take minutes
+                req.setTimeout(0);
+
+                req.write(body);
+                req.end();
+
+            } catch {
+                resolve(false);
+            }
+        });
+    }
+
+    private _handleStreamEvent(event: any) {
+        switch (event.type) {
+            case 'status':
+                this._view?.webview.postMessage({
+                    type: 'streamStatus',
+                    content: event.data,
+                });
+                break;
+
+            case 'thinking':
+                this._view?.webview.postMessage({
+                    type: 'streamThinking',
+                    content: event.data,
+                });
+                break;
+
+            case 'agent_start':
+                this._view?.webview.postMessage({
+                    type: 'streamAgentStart',
+                    intent: event.data?.intent,
+                    agents: event.data?.agents,
+                });
+                break;
+
+            case 'tool_call':
+                this._view?.webview.postMessage({
+                    type: 'streamToolCall',
+                    tool: event.data?.tool,
+                    args: event.data?.args,
+                });
+                break;
+
+            case 'tool_result':
+                this._view?.webview.postMessage({
+                    type: 'streamToolResult',
+                    tool: event.data?.tool,
+                    success: event.data?.success,
+                    output: event.data?.output,
+                });
+                break;
+
+            case 'agent_done':
+                this._view?.webview.postMessage({
+                    type: 'streamAgentDone',
+                    agent: event.data?.agent,
+                });
+                break;
+
+            case 'final_result':
+                this._view?.webview.postMessage({
+                    type: 'chatResponse',
+                    content: event.data?.response,
+                    code: event.data?.code,
+                    agent: event.data?.agent,
+                    intent: event.data?.intent,
+                    references: event.data?.references || [],
+                    agent_trace: event.data?.agent_trace || [],
+                    rag_chunks: event.data?.rag_chunks || 0,
+                    thinking: event.data?.thinking || '',
+                    file_changes: event.data?.file_changes || [],
+                });
+                break;
+
+            case 'error':
+                this._view?.webview.postMessage({
+                    type: 'error',
+                    content: event.data || 'Unknown error',
+                });
+                break;
+        }
+    }
+
+    private _handleChatFallback(body: string): Promise<void> {
+        // Fallback: обычный /chat без streaming (через http module — без таймаута)
+        this._view?.webview.postMessage({
+            type: 'streamStatus',
+            content: '🔍 Анализирую запрос...',
+        });
+
+        return new Promise((resolve) => {
+            try {
+                const url = new URL(`${this._serverUrl}/chat`);
+                const http = require('http');
+
+                const options = {
+                    hostname: url.hostname,
+                    port: url.port,
+                    path: url.pathname,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(body),
+                    },
+                };
+
+                const req = http.request(options, (res: any) => {
+                    let data = '';
+                    res.setEncoding('utf8');
+                    res.on('data', (chunk: string) => { data += chunk; });
+                    res.on('end', () => {
+                        try {
+                            if (res.statusCode !== 200) {
+                                this._view?.webview.postMessage({
+                                    type: 'error',
+                                    content: `Ошибка сервера: ${data}`,
+                                });
+                            } else {
+                                const result = JSON.parse(data);
+                                this._view?.webview.postMessage({
+                                    type: 'chatResponse',
+                                    content: result.response,
+                                    code: result.code,
+                                    agent: result.agent,
+                                    intent: result.intent,
+                                    references: result.references,
+                                    agent_trace: result.agent_trace || [],
+                                    rag_chunks: result.rag_chunks || 0,
+                                    thinking: result.thinking || '',
+                                    file_changes: result.file_changes || [],
+                                });
+                            }
+                        } catch (e: any) {
+                            this._view?.webview.postMessage({
+                                type: 'error',
+                                content: `Ошибка парсинга ответа: ${e.message}`,
+                            });
+                        }
+                        resolve();
+                    });
+                    res.on('error', (e: any) => {
+                        this._view?.webview.postMessage({
+                            type: 'error',
+                            content: `${e.message}. Запущен ли бэкенд?`,
+                        });
+                        resolve();
+                    });
+                });
+
+                req.on('error', (e: any) => {
+                    this._view?.webview.postMessage({
+                        type: 'error',
+                        content: `${e.message}. Запущен ли бэкенд? (cd backend && python server.py)`,
+                    });
+                    resolve();
+                });
+
+                req.setTimeout(0); // No timeout — LLM can take minutes
+                req.write(body);
+                req.end();
+
+            } catch (error: any) {
+                this._view?.webview.postMessage({
+                    type: 'error',
+                    content: `${error.message}. Запущен ли бэкенд?`,
+                });
+                resolve();
+            }
+        });
     }
 
     // ─── Models ────────────────────────────────────────────────
@@ -176,7 +410,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    // ─── Custom Models (FIX: properly update status) ──────────
+    // ─── Custom Models ──────────────────────────────────────────
 
     private async _loadCustomModel(repo: string, name: string, quantization: string) {
         try {
@@ -191,15 +425,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
-            // FIX: Send modelLoaded with the correct model ID
             this._view?.webview.postMessage({
                 type: 'modelLoaded',
                 modelId: result.model_id || name.toLowerCase().replace(/ /g, '-'),
             });
 
-            // Refresh model list so custom model appears in picker
             await this._sendModelList();
-
             vscode.window.showInformationMessage(`Своя модель ${name} загружена!`);
         } catch (error: any) {
             this._view?.webview.postMessage({ type: 'error', content: `Ошибка загрузки: ${error.message}` });
@@ -219,15 +450,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (!response.ok) throw new Error(await response.text());
             const result = (await response.json()) as any;
 
-            // FIX: Send modelLoaded with correct model ID
             this._view?.webview.postMessage({
                 type: 'modelLoaded',
                 modelId: result.model_id || name.toLowerCase().replace(/ /g, '-'),
             });
 
-            // Refresh model list
             await this._sendModelList();
-
             vscode.window.showInformationMessage(`Своя модель ${name} скачана и загружена!`);
         } catch (error: any) {
             this._view?.webview.postMessage({ type: 'error', content: `Ошибка: ${error.message}` });
@@ -244,7 +472,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch (_e) {}
     }
 
-    // ─── Fine-tune (with extended params) ──────────────────────
+    // ─── Fine-tune ──────────────────────────────────────────────
 
     private async _startFineTune(modelId: string, epochs: number,
                                   strategies: string[], extraParams: any = {}) {
@@ -261,7 +489,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 strategies,
             };
 
-            // Add extended params if provided
             if (extraParams.learning_rate) body.learning_rate = extraParams.learning_rate;
             if (extraParams.batch_size) body.batch_size = extraParams.batch_size;
             if (extraParams.gradient_accumulation_steps) body.gradient_accumulation_steps = extraParams.gradient_accumulation_steps;
@@ -275,7 +502,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 body: JSON.stringify(body),
             });
             if (!response.ok) throw new Error(await response.text());
-            // No error = background task started successfully
         } catch (error: any) {
             this._view?.webview.postMessage({ type: 'error', content: `Ошибка запуска дообучения: ${error.message}` });
         }
@@ -299,48 +525,218 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch (_e) {}
     }
 
-    // ─── Code (improved: insert at selection or cursor) ───────
+    // ─── Smart Code Insertion ───────────────────────────────────
 
-    private async _insertCode(code: string, targetFile?: string) {
-        // Если указан целевой файл — открываем его
+    private async _insertCode(code: string, targetFile?: string, lineStart?: number, lineEnd?: number) {
+        // Если указан целевой файл — открываем его и вставляем/заменяем
         if (targetFile) {
             const workspaceFolders = vscode.workspace.workspaceFolders;
             if (workspaceFolders) {
-                const fullPath = vscode.Uri.joinPath(workspaceFolders[0].uri, targetFile);
-                try {
-                    const doc = await vscode.workspace.openTextDocument(fullPath);
-                    const editor = await vscode.window.showTextDocument(doc, { 
-                        viewColumn: vscode.ViewColumn.One 
-                    });
-                    // Вставляем в конец файла
-                    const lastLine = doc.lineCount - 1;
-                    const lastChar = doc.lineAt(lastLine).text.length;
-                    editor.edit(eb => {
-                        eb.insert(new vscode.Position(lastLine, lastChar), '\n\n' + code);
-                    });
-                    return;
-                } catch {
-                    // Файл не найден — fallback к обычной вставке
+                // Normalize path separators
+                const normalizedTarget = targetFile.replace(/\\/g, '/');
+
+                // Пробуем разные варианты пути
+                const candidates = [
+                    vscode.Uri.joinPath(workspaceFolders[0].uri, normalizedTarget),
+                    vscode.Uri.file(targetFile),
+                ];
+
+                // Also try finding the file in workspace by name
+                const fileName = normalizedTarget.split('/').pop() || '';
+                if (fileName) {
+                    try {
+                        const found = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 5);
+                        for (const f of found) {
+                            if (f.fsPath.replace(/\\/g, '/').endsWith(normalizedTarget)) {
+                                candidates.unshift(f); // prioritize exact path match
+                            }
+                        }
+                        // Add all found files as fallback
+                        candidates.push(...found);
+                    } catch {}
                 }
+
+                for (const fullPath of candidates) {
+                    try {
+                        const doc = await vscode.workspace.openTextDocument(fullPath);
+                        const editor = await vscode.window.showTextDocument(doc, {
+                            viewColumn: vscode.ViewColumn.One,
+                            preserveFocus: false,
+                        });
+
+                        if (lineStart && lineStart > 0) {
+                            const startLine = Math.min(lineStart - 1, doc.lineCount - 1);
+
+                            // Calculate end line for REPLACE
+                            const codeLines = code.split('\n').length;
+                            let endLine: number;
+                            if (lineEnd && lineEnd > lineStart) {
+                                // Explicit range given — replace those lines
+                                endLine = Math.min(lineEnd - 1, doc.lineCount - 1);
+                            } else {
+                                // No explicit end — replace same number of lines as new code
+                                endLine = Math.min(startLine + codeLines - 1, doc.lineCount - 1);
+                            }
+
+                            const range = new vscode.Range(
+                                new vscode.Position(startLine, 0),
+                                doc.lineAt(endLine).range.end,
+                            );
+
+                            await editor.edit(eb => {
+                                eb.replace(range, code);
+                            });
+
+                            // Scroll to the replaced code
+                            const revealPos = new vscode.Position(startLine, 0);
+                            editor.revealRange(
+                                new vscode.Range(revealPos, revealPos),
+                                vscode.TextEditorRevealType.InCenter,
+                            );
+                        } else {
+                            // No line info — insert at end
+                            const lastLine = doc.lineCount - 1;
+                            const lastChar = doc.lineAt(lastLine).text.length;
+                            await editor.edit(eb => {
+                                eb.insert(new vscode.Position(lastLine, lastChar), '\n\n' + code);
+                            });
+                        }
+                        vscode.window.showInformationMessage(
+                            `Code inserted into ${targetFile}${lineStart ? ` at line ${lineStart}` : ''}`,
+                        );
+                        return;
+                    } catch {
+                        continue;
+                    }
+                }
+
+                // File not found — inform user
+                vscode.window.showWarningMessage(
+                    `File not found: ${targetFile}. Inserting in active editor.`,
+                );
             }
         }
 
         // Fallback: вставка в активный редактор
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
-            // Нет открытого редактора — открываем новый документ
             const doc = await vscode.workspace.openTextDocument({ content: code });
             await vscode.window.showTextDocument(doc);
             return;
         }
-        
-        editor.edit(eb => {
+
+        await editor.edit(eb => {
             if (editor.selection.isEmpty) {
                 eb.insert(editor.selection.active, code);
             } else {
                 eb.replace(editor.selection, code);
             }
         });
+    }
+
+    // ─── Run Command in Terminal ────────────────────────────────
+
+    private _runCommand(command: string) {
+        const terminal = vscode.window.createTerminal({
+            name: 'IntelliCode',
+            cwd: vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath,
+        });
+        terminal.show();
+        // Send each line as a separate command
+        const lines = command.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+            terminal.sendText(line);
+        }
+    }
+
+    // ─── Apply All Changes (batch file operations) ──────────────
+
+    private async _applyAllChanges(changes: Array<{file: string, code: string, action: string}>) {
+        if (!changes || !changes.length) return;
+
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+
+        let applied = 0;
+        for (const change of changes) {
+            try {
+                const fullPath = path.join(workspaceFolders[0].uri.fsPath, change.file);
+
+                if (change.action === 'create' || change.action === 'write') {
+                    // Создаём директории если нужно
+                    const dir = path.dirname(fullPath);
+                    if (!fs.existsSync(dir)) {
+                        fs.mkdirSync(dir, { recursive: true });
+                    }
+                    fs.writeFileSync(fullPath, change.code, 'utf-8');
+                    applied++;
+                } else if (change.action === 'edit') {
+                    const uri = vscode.Uri.file(fullPath);
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    const editor = await vscode.window.showTextDocument(doc);
+                    // Replace entire content
+                    const fullRange = new vscode.Range(
+                        new vscode.Position(0, 0),
+                        doc.lineAt(doc.lineCount - 1).range.end,
+                    );
+                    await editor.edit(eb => eb.replace(fullRange, change.code));
+                    applied++;
+                }
+            } catch (err: any) {
+                vscode.window.showWarningMessage(`Failed to apply change to ${change.file}: ${err.message}`);
+            }
+        }
+
+        if (applied > 0) {
+            vscode.window.showInformationMessage(`Applied ${applied} file change(s)`);
+        }
+    }
+
+    // ─── Create File ────────────────────────────────────────────
+
+    private async _createFile(filePath: string, content: string) {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+
+        try {
+            const fullPath = path.join(workspaceFolders[0].uri.fsPath, filePath);
+            const dir = path.dirname(fullPath);
+
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+
+            fs.writeFileSync(fullPath, content, 'utf-8');
+
+            // Open the created file
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
+            await vscode.window.showTextDocument(doc);
+
+            vscode.window.showInformationMessage(`Created: ${filePath}`);
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to create ${filePath}: ${err.message}`);
+        }
+    }
+
+    // ─── Open File ──────────────────────────────────────────────
+
+    private async _openFile(filePath: string, lineStart?: number) {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+
+        try {
+            const fullPath = path.join(workspaceFolders[0].uri.fsPath, filePath);
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
+            const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
+
+            if (lineStart && lineStart > 0) {
+                const pos = new vscode.Position(lineStart - 1, 0);
+                editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+                editor.selection = new vscode.Selection(pos, pos);
+            }
+        } catch (err: any) {
+            vscode.window.showWarningMessage(`Cannot open: ${filePath}`);
+        }
     }
 
     // ─── HTML ──────────────────────────────────────────────────

@@ -139,13 +139,23 @@ class FineTuner:
                 _fine_tune_status.update({"running": False, "message": msg})
                 return {"status": "error", "message": msg}
 
-            # Step 2: Find model info
+            # Step 2: Find model info (check built-in AND custom models)
             model_info = None
-            for m in self.config["models"]["available"]:
+            all_models = list(self.config["models"]["available"])
+            # Load custom models list
+            custom_path = Path(__file__).parent.parent / "data" / "custom_models.json"
+            if custom_path.exists():
+                try:
+                    import json as _json
+                    all_models += _json.loads(custom_path.read_text())
+                except Exception:
+                    pass
+            for m in all_models:
                 if m["id"] == model_id:
                     model_info = m
                     break
             if not model_info:
+                # Also try matching by current loaded model
                 raise ValueError(f"Model {model_id} not found")
 
             _fine_tune_status["message"] = f"Loading {model_info['name']} for fine-tuning..."

@@ -1,24 +1,20 @@
 """
-Analyst Agent v3 — анализирует кодовую базу, отвечает на вопросы,
+Analyst Agent v4 — анализирует кодовую базу, отвечает на вопросы,
 находит реализации, объясняет архитектуру.
 
-Улучшения v3:
+Улучшения v4:
+- НЕ удаляет <think> теги — это делает orchestrator через strip_think_tags(),
+  чтобы thinking блоки доходили до UI
+- sanitize_response применяется
 - lang_instruction → ответ на языке пользователя
-- explain_with_fixes → объясняет код И предлагает улучшенную версию
-- Thinking сохраняется отдельно
 """
 
 import re
 import logging
 
+from .utils import sanitize_response
+
 logger = logging.getLogger(__name__)
-
-
-def _strip_think(text: str) -> str:
-    """Убирает <think>...</think> блоки из ответа (для backward compat)"""
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(r"</?think>", "", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 class AnalystAgent:
@@ -26,11 +22,10 @@ class AnalystAgent:
         self.llm = llm
 
     async def analyze(self, question, context, history=None, lang_instruction=""):
-        from .orchestrator import sanitize_response  # добавить импорт
         prompt = self._build_prompt(question, context, history or [], lang_instruction)
         response = await self.llm.generate(prompt)
-        response = _strip_think(response)
-        response = sanitize_response(response)  # ← ДОБАВИТЬ
+        # НЕ strip_think — orchestrator извлечёт thinking
+        response = sanitize_response(response)
         references = self._extract_references(response)
         return {"response": response, "references": references}
 
@@ -39,8 +34,7 @@ class AnalystAgent:
         """Объясняет код подробно"""
         prompt = (
             "<|system|>\n"
-            "You are an expert code analyst. Your task is to explain code clearly and thoroughly.\n"
-            "IMPORTANT: Do NOT output <think> tags or any internal reasoning. Output only your final explanation.\n\n"
+            "You are an expert code analyst. Your task is to explain code clearly and thoroughly.\n\n"
             f"{lang_instruction}\n\n"
             "Structure your explanation:\n"
             "1. **Purpose**: What the code does (high-level)\n"
@@ -57,14 +51,12 @@ class AnalystAgent:
         prompt += f"## Question: {question}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
-        return {"response": _strip_think(response)}
+        return {"response": response}
 
     async def explain_with_fixes(self, code: str, question: str, context: str = "",
                                  lang_instruction: str = "") -> dict:
         """
         Объясняет код подробно И предлагает улучшенную версию.
-        Это ключевое улучшение — вместо просто описания проблем,
-        агент дает конкретный исправленный код.
         """
         prompt = (
             "<|system|>\n"
@@ -72,7 +64,6 @@ class AnalystAgent:
             "1. Explain the code clearly\n"
             "2. Identify ALL potential issues\n"
             "3. Provide a COMPLETE IMPROVED VERSION of the code\n\n"
-            "IMPORTANT: Do NOT output <think> tags. Output only your final analysis.\n\n"
             f"{lang_instruction}\n\n"
             "Structure your response EXACTLY like this:\n"
             "## Purpose\n"
@@ -101,10 +92,11 @@ class AnalystAgent:
         prompt += f"## Question: {question}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
-        response = _strip_think(response)
+        # НЕ удаляем think теги — orchestrator сделает это и покажет в UI
 
-        # Извлекаем улучшенный код
-        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', response, re.DOTALL)
+        # Извлекаем улучшенный код (без think тегов для парсинга)
+        clean_for_parse = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', clean_for_parse, re.DOTALL)
         improved_code = code_blocks[-1].strip() if code_blocks else None
 
         return {
@@ -114,8 +106,7 @@ class AnalystAgent:
 
     def _build_prompt(self, question, context, history, lang_instruction: str = "") -> str:
         system = (
-            "You are an expert code analyst with deep knowledge of software architecture.\n"
-            "CRITICAL: Do NOT output <think> tags or internal reasoning chains. Output only your final answer.\n\n"
+            "You are an expert code analyst with deep knowledge of software architecture.\n\n"
             f"{lang_instruction}\n\n"
             "Your role:\n"
             "1. Analyze codebases thoroughly and accurately\n"
@@ -141,8 +132,10 @@ class AnalystAgent:
         return "\n".join(parts)
 
     def _extract_references(self, response: str) -> list:
+        # Clean think tags for reference extraction
+        clean = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
         refs = set()
-        for match in re.findall(r'`([^`]*\.\w{1,5})`', response):
+        for match in re.findall(r'`([^`]*\.\w{1,5})`', clean):
             if '/' in match or '\\' in match or '.' in match:
                 refs.add(match)
         return list(refs)[:10]

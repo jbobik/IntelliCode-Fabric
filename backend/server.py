@@ -22,6 +22,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -90,6 +91,7 @@ class ChatRequest(BaseModel):
     context_file: Optional[str] = None
     selected_code: Optional[str] = None
     conversation_history: list = []
+    platform: Optional[str] = None  # 'win32', 'linux', 'darwin'
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -463,11 +465,66 @@ async def chat(req: ChatRequest):
             context_file=req.context_file,
             selected_code=req.selected_code,
             conversation_history=req.conversation_history,
+            platform=req.platform,
         )
         return response
     except Exception as e:
         logger.error(f"Chat error: {e}\n{traceback.format_exc()}")
         raise HTTPException(500, str(e))
+
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    SSE (Server-Sent Events) endpoint для real-time streaming.
+    Каждый event — JSON строка с type и data.
+    """
+    if not llm_engine or not llm_engine.is_loaded():
+        raise HTTPException(400, "No model loaded. Please select a model first.")
+
+    event_queue: asyncio.Queue = asyncio.Queue()
+
+    async def stream_callback(event_type: str, data: any = None):
+        await event_queue.put({"type": event_type, "data": data})
+
+    async def run_orchestrator():
+        try:
+            result = await orchestrator.process_request(
+                message=req.message,
+                context_file=req.context_file,
+                selected_code=req.selected_code,
+                conversation_history=req.conversation_history,
+                stream_callback=stream_callback,
+                platform=req.platform,
+            )
+            await event_queue.put({"type": "final_result", "data": result})
+        except Exception as e:
+            logger.error(f"Stream chat error: {e}\n{traceback.format_exc()}")
+            await event_queue.put({"type": "error", "data": str(e)})
+        finally:
+            await event_queue.put(None)  # sentinel
+
+    async def event_generator():
+        task = asyncio.create_task(run_orchestrator())
+        try:
+            while True:
+                event = await event_queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/generate")

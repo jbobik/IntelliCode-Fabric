@@ -24,6 +24,7 @@ data/*.jsonl
 .vscode/settings.json
 *.sw[po]
 .idea/
+.claude/
 
 # OS
 .DS_Store
