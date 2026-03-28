@@ -9,9 +9,18 @@ from pathlib import Path
 from typing import AsyncGenerator, Callable, Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList
 from threading import Thread
 from huggingface_hub import snapshot_download
+
+
+class _CancelCriteria(StoppingCriteria):
+    """StoppingCriteria that checks a cancel flag to abort generation early."""
+    def __init__(self):
+        self.cancelled = False
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return self.cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +37,13 @@ class LLMInference:
         self.models_dir = Path(__file__).parent.parent / "models"
         self.models_dir.mkdir(exist_ok=True)
         self._lock = asyncio.Lock()
+        self._cancel_criteria = _CancelCriteria()
         logger.info(f"LLMInference initialized. Device: {self.device}")
+
+    def cancel_generation(self):
+        """Signal the current generation to stop as soon as possible."""
+        self._cancel_criteria.cancelled = True
+        logger.info("Generation cancel requested")
 
     def is_loaded(self) -> bool:
         return self.model is not None and self.tokenizer is not None
@@ -191,6 +206,9 @@ class LLMInference:
         return await loop.run_in_executor(None, lambda: self._generate_sync(prompt, **kwargs))
 
     def _generate_sync(self, prompt: str, **kwargs) -> str:
+        # Reset cancel flag for new generation
+        self._cancel_criteria.cancelled = False
+
         # Use model's max context length, fallback to 8192
         max_ctx = getattr(self.model.config, 'max_position_embeddings', 8192)
         max_ctx = min(max_ctx, 16384)  # cap at 16K to avoid OOM
@@ -211,6 +229,7 @@ class LLMInference:
             "top_k": self.gen_config.get("top_k", 50),
             "repetition_penalty": self.gen_config.get("repetition_penalty", 1.1),
             "pad_token_id": self.tokenizer.pad_token_id,
+            "stopping_criteria": StoppingCriteriaList([self._cancel_criteria]),
         }
         if temperature > 0.01:
             gen_kwargs["temperature"] = temperature
@@ -231,6 +250,9 @@ class LLMInference:
         if not self.is_loaded():
             raise RuntimeError("No model loaded")
 
+        # Reset cancel flag for new generation
+        self._cancel_criteria.cancelled = False
+
         streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
         max_ctx = getattr(self.model.config, 'max_position_embeddings', 8192)
         max_ctx = min(max_ctx, 16384)
@@ -247,6 +269,7 @@ class LLMInference:
             "top_k": self.gen_config.get("top_k", 50),
             "repetition_penalty": self.gen_config.get("repetition_penalty", 1.1),
             "pad_token_id": self.tokenizer.pad_token_id,
+            "stopping_criteria": StoppingCriteriaList([self._cancel_criteria]),
         }
         if temperature > 0.01:
             gen_kwargs["temperature"] = temperature
@@ -261,6 +284,8 @@ class LLMInference:
         thread = Thread(target=_run)
         thread.start()
         for text in streamer:
+            if self._cancel_criteria.cancelled:
+                break
             yield text
             await asyncio.sleep(0)
-        thread.join()
+        thread.join(timeout=5)  # Don't hang forever if thread is stuck

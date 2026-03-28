@@ -25,7 +25,7 @@ from .utils import strip_think_tags, detect_language, sanitize_response
 
 logger = logging.getLogger(__name__)
 
-MAX_REACT_STEPS = 8  # Максимум итераций ReAct-цикла
+MAX_REACT_STEPS = 4  # Максимум итераций ReAct-цикла
 
 
 # ─── IT-фильтр ──────────────────────────────────────────────────────────────
@@ -140,6 +140,92 @@ def strip_tool_calls(text: str) -> str:
     text = re.sub(r'<tool>.*?</tool>', '', text, flags=re.DOTALL)
     text = re.sub(r'TOOL_CALL:\s*\{.*?\}', '', text, flags=re.DOTALL)
     return text.strip()
+
+
+def _strip_markdown_fences(content: str) -> str:
+    """Remove markdown code fences wrapping content."""
+    cleaned = re.sub(r'^```[\w]*\s*\n?', '', content)
+    cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+    return cleaned.strip()
+
+
+def parse_proposed_changes(response: str) -> list[dict]:
+    """
+    Парсит ответ AI и извлекает структурированные предложения изменений кода.
+    Поддерживает два формата:
+    1. Действие/Файл/Строки + code block (основной)
+    2. <<<CREATE_FILE>>>/<<<EDIT_FILE>>> маркеры (legacy)
+
+    Возвращает список:
+    {
+        "action": "replace" | "add" | "delete" | "create",
+        "file": "path/to/file",
+        "lineStart": int | None,
+        "lineEnd": int | None,
+        "code": str,
+        "description": str,
+    }
+    """
+    changes: list[dict] = []
+    seen: set[tuple] = set()  # (file, code_hash) for dedup
+
+    def _add(action, file, code, line_start=None, line_end=None, desc=None):
+        key = (file, hash(code) if code else 0)
+        if key in seen:
+            return
+        seen.add(key)
+        changes.append({
+            "action": action,
+            "file": file,
+            "lineStart": line_start,
+            "lineEnd": line_end,
+            "code": code or "",
+            "description": desc or f"{action}: {file}",
+        })
+
+    # ── Format 1: <<<CREATE_FILE path="...">>>...<<<END_FILE>>> ──
+    for m in re.finditer(
+        r'<<<\s*CREATE_FILE\s+path="([^"]+)"\s*>{1,}([\s\S]*?)(?:<<<\s*END_FILE\s*>{1,}|$|(?=<<<\s*(?:CREATE|EDIT|DELETE|EXECUTE)))',
+        response, re.IGNORECASE
+    ):
+        _add("create", m.group(1), _strip_markdown_fences(m.group(2).strip()),
+             desc=f"Создать файл: {m.group(1)}")
+
+    for m in re.finditer(
+        r'<<<\s*EDIT_FILE\s+path="([^"]+)"\s*>{1,}([\s\S]*?)(?:<<<\s*END_FILE\s*>{1,}|$|(?=<<<\s*(?:CREATE|EDIT|DELETE|EXECUTE)))',
+        response, re.IGNORECASE
+    ):
+        _add("replace", m.group(1), _strip_markdown_fences(m.group(2).strip()),
+             desc=f"Редактировать: {m.group(1)}")
+
+    for m in re.finditer(
+        r'<<<\s*DELETE_FILE\s+path="([^"]+)"\s*/?\s*>{1,}',
+        response, re.IGNORECASE
+    ):
+        _add("delete", m.group(1), "", desc=f"Удалить: {m.group(1)}")
+
+    # ── Format 2: Действие/Файл/Строки + ```code``` ──
+    pattern = (
+        r'(?:Действие|Action)\s*[:：]\s*(заменить|добавить|удалить|создать|replace|add|delete|create)\s*\r?\n'
+        r'\s*(?:Файл|File)\s*[:：]\s*[`"\']*([^\s`"\'\r\n]+)[`"\']*\s*\r?\n'
+        r'(?:\s*(?:Строк[аи]?|Строка|Lines?|Line)\s*[:：]\s*~?(\d+)(?:\s*[-–—]\s*(\d+))?\s*\r?\n)?'
+        r'\s*```(?:\w+)?\r?\n([\s\S]*?)```'
+    )
+    action_map = {
+        'заменить': 'replace', 'replace': 'replace',
+        'добавить': 'add', 'add': 'add',
+        'удалить': 'delete', 'delete': 'delete',
+        'создать': 'create', 'create': 'create',
+    }
+    for m in re.finditer(pattern, response, re.IGNORECASE):
+        action = action_map.get(m.group(1).lower(), 'replace')
+        file_path = m.group(2)
+        line_start = int(m.group(3)) if m.group(3) else None
+        line_end = int(m.group(4)) if m.group(4) else None
+        code = m.group(5).strip()
+        _add(action, file_path, code, line_start, line_end)
+
+    return changes
 
 
 def _clean_react_response(text: str) -> str:
@@ -271,14 +357,42 @@ class AgentOrchestrator:
 
         # ── Шаг 1: RAG — собираем контекст проекта ──
         await emit("status", "Ищу релевантный контекст в проекте...")
-        context_chunks = await self.rag.retrieve(message, top_k=5)
+        general_keywords = ["проект", "project", "архитектур", "все файл", "код", "улучш", "improve", "review", "ревью"]
+        is_general = any(kw in message.lower() for kw in general_keywords)
+        retrieve_top_k = 8 if is_general else 5
+        context_chunks = await self.rag.retrieve(message, top_k=retrieve_top_k)
         context_text = self._format_context(context_chunks)
 
         if context_file:
             file_chunks = await self.rag.get_file_context(context_file)
             if file_chunks:
                 file_text = "\n".join([c["content"] for c in file_chunks[:3]])
-                context_text = f"// Current file: {context_file}\n{file_text}\n\n{context_text}"
+                # Добавляем текущий файл В КОНЕЦ контекста, а не в начало,
+                # чтобы RAG-контекст из других файлов не терялся
+                context_text = f"{context_text}\n\n// Current file: {context_file}\n{file_text}"
+            else:
+                # RAG has no index for this file — read directly from disk
+                # НО: ограничиваем размер, чтобы не забить весь контекст одним файлом
+                try:
+                    cf_path = Path(context_file)
+                    if cf_path.exists():
+                        raw = cf_path.read_text(encoding="utf-8", errors="replace")
+                        lines = raw.splitlines()
+                        # Ограничиваем до 150 строк если есть RAG-контекст из других файлов
+                        max_lines = 150 if context_text.strip() else 300
+                        numbered = "\n".join(f"{i+1:4d} | {ln}" for i, ln in enumerate(lines[:max_lines]))
+                        if len(lines) > max_lines:
+                            numbered += f"\n... [{len(lines)-max_lines} more lines]"
+                        # Добавляем В КОНЕЦ, не в начало
+                        context_text = (
+                            f"{context_text}\n\n"
+                            f"// === CURRENT FILE (from disk): {context_file} ({len(lines)} lines) ===\n"
+                            f"{numbered}"
+                        )
+                        logger.info(f"Injected context_file from disk: {context_file} ({min(len(lines), max_lines)} of {len(lines)} lines)")
+                except Exception as e:
+                    logger.warning(f"Could not read context_file from disk: {e}")
+
 
         logger.info(f"RAG retrieved {len(context_chunks)} chunks for: {message[:60]}...")
 
@@ -304,7 +418,8 @@ class AgentOrchestrator:
         # ── Шаг 3: Execution с ReAct-циклом ──
         result = await self._execute_plan(
             plan, message, context_text, selected_code,
-            conversation_history, user_lang, emit
+            conversation_history, user_lang, emit,
+            context_file=context_file,
         )
 
         # ── Шаг 4: Reflection ──
@@ -490,7 +605,7 @@ Has project context: {has_context}
     async def _execute_plan(
         self, plan: dict, message: str, context: str,
         selected_code: Optional[str], history: list, user_lang: str,
-        emit: Callable,
+        emit: Callable, context_file: Optional[str] = None,
     ) -> dict:
         intent = plan.get("intent", "general")
         agents = plan.get("agents", ["analyst"])
@@ -508,7 +623,8 @@ Has project context: {has_context}
         if needs_tools:
             return await self._react_loop(
                 message, context, selected_code, history,
-                lang_instruction, agents, intent, emit
+                lang_instruction, agents, intent, emit,
+                context_file=context_file,
             )
 
         # Иначе — стандартное выполнение через агентов
@@ -532,7 +648,7 @@ Has project context: {has_context}
     async def _react_loop(
         self, message: str, context: str, selected_code: Optional[str],
         history: list, lang_instruction: str, agents: list,
-        intent: str, emit: Callable,
+        intent: str, emit: Callable, context_file: Optional[str] = None,
     ) -> dict:
         """
         Настоящий ReAct-цикл: LLM решает, какие инструменты вызвать,
@@ -544,7 +660,8 @@ Has project context: {has_context}
         tool_descriptions = self.toolkit.get_tools_description()
         all_thinking = []
         tool_trace = []
-        files_already_read = set()  # Prevent re-reading same files
+        # Pre-seed with context_file so agent doesn't try to re-read what we already injected
+        files_already_read: set = {context_file} if context_file else set()
 
         # Определяем платформу
         platform_map = {"win32": "Windows", "linux": "Linux", "darwin": "macOS"}
@@ -566,7 +683,7 @@ Has project context: {has_context}
             f"6. NEVER read the same file twice — use the content from your first read.\n"
             f"7. For EVERY code suggestion, ALWAYS specify action, file, and lines using this EXACT format:\n"
             f"   Действие: заменить|добавить|удалить\n"
-            f"   Файл: path/to/file.ext\n"
+            f"   Файл: <ACTUAL_FILE_PATH>\n"
             f"   Строки: START-END\n"
             f"   ```lang\n"
             f"   code here\n"
@@ -575,7 +692,7 @@ Has project context: {has_context}
             f"   EXAMPLES:\n"
             f"   To REPLACE code (заменить):\n"
             f"   Действие: заменить\n"
-            f"   Файл: src/utils.py\n"
+            f"   Файл: path/to/real_file.py\n"
             f"   Строки: 42-67\n"
             f"   ```python\n"
             f"   def improved_function():\n"
@@ -603,7 +720,12 @@ Has project context: {has_context}
         messages_context = f"<|system|>\n{system}\n<|end|>\n"
 
         if context:
-            messages_context += f"<|user|>\n## Project Context:\n```\n{context[:3000]}\n```\n\n"
+            # Increase budget: file content (injected in Fix 2) takes priority at start
+            ctx_snippet = context[:6000]
+            ctx_note = ""
+            if context_file:
+                ctx_note = f"NOTE: The content of '{context_file}' is already included below — DO NOT call read_file on it.\n\n"
+            messages_context += f"<|user|>\n## Project Context:\n{ctx_note}```\n{ctx_snippet}\n```\n\n"
         else:
             messages_context += "<|user|>\n"
 
@@ -615,6 +737,18 @@ Has project context: {has_context}
         accumulated_code = None
 
         for step in range(MAX_REACT_STEPS):
+
+            if self.llm._cancel_criteria.cancelled:
+                logger.info("[REACT] Cancelled by user")
+                return {
+                    "response": "⏹ Запрос отменён пользователем.",
+                    "code": None,
+                    "agent": "react",
+                    "intent": intent,
+                    "agent_trace": ["react"] + tool_trace,
+                    "thinking": "\n\n".join(all_thinking),
+                }
+            
             logger.info(f"  [REACT step {step + 1}/{MAX_REACT_STEPS}]")
             await emit("status", f"🤔 Шаг {step + 1}: Агент размышляет...")
 
@@ -979,6 +1113,12 @@ Has project context: {has_context}
 
         if "file_changes" not in result:
             result["file_changes"] = []
+
+        # ── Парсим proposed_changes из ответа ──
+        proposed = parse_proposed_changes(response)
+        if proposed:
+            logger.info(f"Parsed {len(proposed)} proposed changes from response")
+        result["proposed_changes"] = proposed
 
         return result
 

@@ -477,6 +477,19 @@ async def chat(req: ChatRequest):
         raise HTTPException(500, str(e))
 
 
+_cancel_flag = False
+
+@app.post("/chat/cancel")
+async def chat_cancel():
+    """Cancel the current LLM generation."""
+    global _cancel_flag
+    _cancel_flag = True
+    if llm_engine:
+        llm_engine.cancel_generation()
+    logger.info("Chat cancel requested via /chat/cancel")
+    return {"status": "ok"}
+
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
     """

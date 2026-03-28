@@ -47,7 +47,7 @@ class AnalystAgent:
             f"## Code to explain:\n```\n{code}\n```\n\n"
         )
         if context:
-            prompt += f"## Additional context from project:\n```\n{context[:2000]}\n```\n\n"
+            prompt += f"## Additional context from project:\n```\n{context[:5000]}\n```\n\n"
         prompt += f"## Question: {question}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
@@ -78,9 +78,15 @@ class AnalystAgent:
             "- **Impact**: why it matters\n"
             "- **Fix**: specific fix\n\n"
             "## Improved Code\n"
-            "```\n"
-            "// Complete improved version with all fixes applied\n"
+            "For EACH file that needs changes, use this format:\n\n"
+            "Действие: заменить\n"
+            "Файл: path/to/file.ext\n"
+            "Строки: START-END\n"
+            "```lang\n"
+            "improved code\n"
             "```\n\n"
+            "ALWAYS include Действие, Файл, and Строки before each code block.\n"
+            "If multiple files need changes, output a separate block for each.\n\n"
             "## Summary of Changes\n"
             "Brief list of all improvements made\n"
             "<|end|>\n"
@@ -88,7 +94,7 @@ class AnalystAgent:
             f"## Code to analyze and improve:\n```\n{code[:4000]}\n```\n\n"
         )
         if context:
-            prompt += f"## Project context:\n```\n{context[:2000]}\n```\n\n"
+            prompt += f"## Project context:\n```\n{context[:5000]}\n```\n\n"
         prompt += f"## Question: {question}\n<|end|>\n<|assistant|>"
 
         response = await self.llm.generate(prompt)
@@ -124,7 +130,7 @@ class AnalystAgent:
 
         user_msg = ""
         if context:
-            user_msg += f"## Relevant Project Code:\n```\n{context[:3000]}\n```\n\n"
+            user_msg += f"## Relevant Project Code:\n```\n{context[:5000]}\n```\n\n"
         user_msg += f"## Question: {question}"
 
         parts.append(f"<|user|>\n{user_msg}\n<|end|>")

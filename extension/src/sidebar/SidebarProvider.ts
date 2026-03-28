@@ -6,6 +6,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _serverUrl: string;
     private _pendingMessages: any[] = [];
+    private _currentRequest: any = null; // Active HTTP request for cancellation
+    private _isCancelled = false;         // True when user explicitly cancelled
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -64,6 +66,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'applyAllChanges': await this._applyAllChanges(msg.changes); break;
                 case 'createFile': await this._createFile(msg.filePath, msg.content); break;
                 case 'openFile': await this._openFile(msg.filePath, msg.lineStart); break;
+                case 'showProposedDiff': await this._showProposedDiff(msg); break;
+                case 'applyProposedChange': await this._applyProposedChange(msg); break;
+                case 'applyAllProposed': await this._applyAllProposed(msg.changes); break;
+                case 'cancelRequest': this._cancelCurrentRequest(); break;
             }
         });
 
@@ -95,6 +101,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             conversation_history: message.history || [],
             platform: process.platform,
         });
+
+        // Reset cancel flag for new request
+        this._isCancelled = false;
 
         // Сначала пробуем SSE streaming, если не получится — fallback на обычный /chat
         try {
@@ -134,6 +143,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
                 const req = http.request(options, (res: any) => {
                     if (res.statusCode !== 200) {
+                        this._currentRequest = null;
                         resolve(false);
                         return;
                     }
@@ -163,6 +173,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     });
 
                     res.on('end', () => {
+                        this._currentRequest = null;
                         // Process remaining buffer
                         if (buffer.trim().startsWith('data: ')) {
                             try {
@@ -177,16 +188,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     });
 
                     res.on('error', () => {
+                        this._currentRequest = null;
+                        if (this._isCancelled) { this._isCancelled = false; resolve(true); return; }
                         resolve(false);
                     });
                 });
 
                 req.on('error', () => {
+                    this._currentRequest = null;
+                    if (this._isCancelled) { this._isCancelled = false; resolve(true); return; }
                     resolve(false);
                 });
 
                 // No timeout — LLM generation can take minutes
                 req.setTimeout(0);
+
+                // Store request for cancellation
+                this._currentRequest = req;
 
                 req.write(body);
                 req.end();
@@ -257,6 +275,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     rag_chunks: event.data?.rag_chunks || 0,
                     thinking: event.data?.thinking || '',
                     file_changes: event.data?.file_changes || [],
+                    proposed_changes: event.data?.proposed_changes || [],
                 });
                 break;
 
@@ -316,6 +335,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                                     rag_chunks: result.rag_chunks || 0,
                                     thinking: result.thinking || '',
                                     file_changes: result.file_changes || [],
+                                    proposed_changes: result.proposed_changes || [],
                                 });
                             }
                         } catch (e: any) {
@@ -344,6 +364,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 });
 
                 req.setTimeout(0); // No timeout — LLM can take minutes
+                this._currentRequest = req;
                 req.write(body);
                 req.end();
 
@@ -354,6 +375,51 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 });
                 resolve();
             }
+        });
+    }
+
+    // ─── Cancel Request ────────────────────────────────────────
+
+    // SidebarProvider.ts, в _cancelCurrentRequest()
+    private _cancelCurrentRequest() {
+        this._isCancelled = true;
+
+        if (this._currentRequest) {
+            try {
+                this._currentRequest.destroy();
+            } catch {}
+            this._currentRequest = null;
+        }
+
+        // Also call server-side cancel endpoint (best-effort)
+        try {
+            const url = new URL(`${this._serverUrl}/chat/cancel`);
+            const http = require('http');
+            const req = http.request({
+                hostname: url.hostname,
+                port: url.port,
+                path: url.pathname,
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+            req.on('error', () => {}); // ignore errors
+            req.end();
+        } catch {}
+
+        // НОВОЕ: Сразу отправить UI-сообщение об отмене,
+        // чтобы UI не ждал final_result который никогда не придёт
+        this._view?.webview.postMessage({
+            type: 'chatResponse',
+            content: '⏹ Запрос отменён',
+            code: null,
+            agent: 'system',
+            intent: 'cancelled',
+            references: [],
+            agent_trace: [],
+            rag_chunks: 0,
+            thinking: '',
+            file_changes: [],
+            proposed_changes: [],
         });
     }
 
@@ -637,98 +703,143 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    // ─── Smart Code Actions (replace/add/delete/insert) ────────
+    // ─── Smart Code Actions ─────────────────────────────────────
+
+    /**
+     * Compute modified file content by applying action+code to original.
+     * Falls back to whole-file replacement when lineStart is absent.
+     */
+    private _computeModified(
+        original: string,
+        action: string,
+        code: string,
+        lineStart?: number,
+        lineEnd?: number,
+    ): string {
+        if (action === 'add') {
+            if (lineStart && lineStart > 0) {
+                const lines = original.split('\n');
+                lines.splice(Math.min(lineStart, lines.length), 0, code);
+                return lines.join('\n');
+            }
+            return original + '\n\n' + code;
+        }
+        if (action === 'delete') {
+            const lines = original.split('\n');
+            const start = Math.max(0, (lineStart || 1) - 1);
+            const end = Math.min((lineEnd || lineStart || 1), lines.length);
+            lines.splice(start, end - start);
+            return lines.join('\n');
+        }
+        // replace / insert / create — use lineStart..lineEnd range or whole file
+        if (lineStart && lineStart > 0) {
+            const lines = original.split('\n');
+            const start = Math.max(0, lineStart - 1);
+            const end = lineEnd != null ? Math.min(lineEnd, lines.length) : lines.length;
+            lines.splice(start, end - start, ...code.split('\n'));
+            return lines.join('\n');
+        }
+        return code; // whole-file replacement
+    }
+
+    /**
+     * Show a virtual split-diff (icf-orig: vs icf-mod:) then immediately
+     * prompt the user with Approve / Reject.
+     * If approved, writes changes to disk via WorkspaceEdit and saves.
+     * Returns true when changes were applied.
+     */
+    private async _showDiffAndApply(
+        doc: vscode.TextDocument,
+        action: string,
+        code: string,
+        lineStart?: number,
+        lineEnd?: number,
+    ): Promise<boolean> {
+        const originalContent = doc.getText();
+        const modifiedContent = this._computeModified(originalContent, action, code, lineStart, lineEnd);
+
+        const scheme = `icf-${Date.now()}`;
+        const d1 = vscode.workspace.registerTextDocumentContentProvider(
+            `${scheme}-orig`,
+            { provideTextDocumentContent: () => originalContent },
+        );
+        const d2 = vscode.workspace.registerTextDocumentContentProvider(
+            `${scheme}-mod`,
+            { provideTextDocumentContent: () => modifiedContent },
+        );
+
+        const fileName = doc.fileName.replace(/\\/g, '/').split('/').pop() || 'file';
+        await vscode.commands.executeCommand(
+            'vscode.diff',
+            vscode.Uri.parse(`${scheme}-orig:${fileName}`),
+            vscode.Uri.parse(`${scheme}-mod:${fileName}`),
+            `IntelliCode: ${fileName} (Original ↔ Proposed)`,
+        );
+
+        const choice = await vscode.window.showWarningMessage(
+            `Применить изменения в ${fileName}?`, 'Применить', 'Отклонить',
+        );
+
+        d1.dispose();
+        d2.dispose();
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+
+        if (choice !== 'Применить') {
+            return false;
+        }
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(
+            doc.uri,
+            new vscode.Range(new vscode.Position(0, 0), doc.lineAt(doc.lineCount - 1).range.end),
+            modifiedContent,
+        );
+        await vscode.workspace.applyEdit(edit);
+        await doc.save();
+        vscode.window.showInformationMessage(`Изменения применены: ${fileName}`);
+        return true;
+    }
 
     private async _handleCodeAction(msg: any) {
         const { action, code, targetFile, lineStart, lineEnd } = msg;
 
-        if (action === 'insert' && !targetFile) {
-            // Simple insert into active editor at cursor
+        // No target file — work with the active editor
+        if (!targetFile) {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
-                const doc = await vscode.workspace.openTextDocument({ content: code });
-                await vscode.window.showTextDocument(doc);
+                const newDoc = await vscode.workspace.openTextDocument({ content: code });
+                await vscode.window.showTextDocument(newDoc);
                 return;
             }
-            await editor.edit(eb => {
-                if (editor.selection.isEmpty) {
-                    eb.insert(editor.selection.active, code);
-                } else {
-                    eb.replace(editor.selection, code);
-                }
-            });
-            return;
-        }
-
-        // Find and open the target file
-        const doc = await this._findAndOpenFile(targetFile);
-        if (!doc) {
-            // Fallback to active editor
-            if (code) {
-                this._handleCodeAction({ action: 'insert', code });
-            }
-            return;
-        }
-
-        const editor = await vscode.window.showTextDocument(doc.doc, {
-            viewColumn: vscode.ViewColumn.One,
-            preserveFocus: false,
-        });
-
-        if (action === 'delete') {
-            // DELETE: remove lines lineStart..lineEnd
-            const start = Math.max(0, (lineStart || 1) - 1);
-            const end = Math.min((lineEnd || lineStart || 1) - 1, doc.doc.lineCount - 1);
-            const range = new vscode.Range(
-                new vscode.Position(start, 0),
-                end + 1 < doc.doc.lineCount
-                    ? new vscode.Position(end + 1, 0) // include the newline
-                    : doc.doc.lineAt(end).range.end,
-            );
-            await editor.edit(eb => { eb.delete(range); });
-            vscode.window.showInformationMessage(`Deleted lines ${lineStart}-${lineEnd || lineStart} from ${targetFile}`);
-
-        } else if (action === 'replace') {
-            // REPLACE: replace lines lineStart..lineEnd with new code
-            if (!lineStart || !code) return;
-            const start = Math.min(lineStart - 1, doc.doc.lineCount - 1);
-            const end = lineEnd
-                ? Math.min(lineEnd - 1, doc.doc.lineCount - 1)
-                : Math.min(start + code.split('\n').length - 1, doc.doc.lineCount - 1);
-            const range = new vscode.Range(
-                new vscode.Position(start, 0),
-                doc.doc.lineAt(end).range.end,
-            );
-            await editor.edit(eb => { eb.replace(range, code); });
-            editor.revealRange(new vscode.Range(new vscode.Position(start, 0), new vscode.Position(start, 0)),
-                vscode.TextEditorRevealType.InCenter);
-            vscode.window.showInformationMessage(`Replaced lines ${lineStart}-${lineEnd || '...'} in ${targetFile}`);
-
-        } else if (action === 'add') {
-            // ADD: insert code after lineStart (or at end of file)
-            if (!code) return;
-            if (lineStart && lineStart > 0) {
-                const insertLine = Math.min(lineStart, doc.doc.lineCount);
-                const pos = insertLine < doc.doc.lineCount
-                    ? new vscode.Position(insertLine, 0)
-                    : doc.doc.lineAt(doc.doc.lineCount - 1).range.end;
-                const prefix = insertLine < doc.doc.lineCount ? '' : '\n';
-                const suffix = insertLine < doc.doc.lineCount ? '\n' : '';
-                await editor.edit(eb => { eb.insert(pos, prefix + code + suffix); });
-                editor.revealRange(new vscode.Range(new vscode.Position(insertLine, 0), new vscode.Position(insertLine, 0)),
-                    vscode.TextEditorRevealType.InCenter);
-            } else {
-                // No line — append to end
-                const lastLine = doc.doc.lineCount - 1;
-                const lastChar = doc.doc.lineAt(lastLine).text.length;
+            if (action === 'insert') {
                 await editor.edit(eb => {
-                    eb.insert(new vscode.Position(lastLine, lastChar), '\n\n' + code);
+                    if (editor.selection.isEmpty) {
+                        eb.insert(editor.selection.active, code);
+                    } else {
+                        eb.replace(editor.selection, code);
+                    }
                 });
+            } else {
+                await this._showDiffAndApply(editor.document, action, code, lineStart, lineEnd);
             }
-            vscode.window.showInformationMessage(`Added code to ${targetFile}${lineStart ? ' at line ' + lineStart : ''}`);
+            return;
         }
-    }
 
+        if (action === 'create') {
+            await this._createFile(targetFile, code);
+            return;
+        }
+
+        const found = await this._findAndOpenFile(targetFile);
+        if (!found) {
+            vscode.window.showWarningMessage(
+                `Файл "${targetFile}" не найден в проекте. Убедитесь, что файл существует.`,
+            );
+            return;
+        }
+
+        await this._showDiffAndApply(found.doc, action, code, lineStart, lineEnd);
+    }
     /**
      * Find a file in workspace by path and return the opened document.
      */
@@ -871,6 +982,102 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         } catch (err: any) {
             vscode.window.showWarningMessage(`Cannot open: ${filePath}`);
         }
+    }
+
+    // ─── Proposed Changes: Diff Preview & Apply ─────────────────
+
+    /**
+     * Show diff preview for a proposed change and prompt Approve/Reject.
+     */
+    private async _showProposedDiff(msg: any) {
+        const { file: targetFile, code, action, lineStart, lineEnd } = msg;
+
+        if (!targetFile) {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                const newDoc = await vscode.workspace.openTextDocument({ content: code });
+                await vscode.window.showTextDocument(newDoc, { viewColumn: vscode.ViewColumn.Beside });
+                return;
+            }
+            await this._showDiffAndApply(editor.document, action || 'replace', code, lineStart, lineEnd);
+            return;
+        }
+
+        const found = await this._findAndOpenFile(targetFile);
+        if (!found) {
+            const newDoc = await vscode.workspace.openTextDocument({
+                content: code,
+                language: this._langFromPath(targetFile),
+            });
+            await vscode.window.showTextDocument(newDoc, { viewColumn: vscode.ViewColumn.Beside });
+            return;
+        }
+
+        await this._showDiffAndApply(found.doc, action || 'replace', code, lineStart, lineEnd);
+    }
+
+    /**
+     * Apply a single proposed change — shows diff + Approve/Reject first.
+     */
+    private async _applyProposedChange(msg: any) {
+        const { file: targetFile, code, action, lineStart, lineEnd } = msg;
+        if (!targetFile) return;
+
+        if (action === 'create') {
+            await this._createFile(targetFile, code);
+            this._notifyChangeApplied(msg, true);
+            return;
+        }
+
+        const found = await this._findAndOpenFile(targetFile);
+        if (!found) {
+            vscode.window.showWarningMessage(`Файл "${targetFile}" не найден в проекте.`);
+            this._notifyChangeApplied(msg, false);
+            return;
+        }
+
+        const applied = await this._showDiffAndApply(found.doc, action, code, lineStart, lineEnd);
+        this._notifyChangeApplied(msg, applied);
+    }
+
+    /**
+     * Apply all proposed changes at once.
+     */
+    private async _applyAllProposed(changes: any[]) {
+        if (!changes || !changes.length) return;
+
+        let applied = 0;
+        for (const change of changes) {
+            try {
+                await this._applyProposedChange(change);
+                applied++;
+            } catch (err: any) {
+                vscode.window.showWarningMessage(`Failed to apply change to ${change.file}: ${err.message}`);
+            }
+        }
+
+        if (applied > 0) {
+            vscode.window.showInformationMessage(`Applied ${applied} of ${changes.length} proposed changes`);
+        }
+    }
+
+    private _notifyChangeApplied(change: any, success: boolean) {
+        this._view?.webview.postMessage({
+            type: 'proposedChangeApplied',
+            file: change.file,
+            success,
+        });
+    }
+
+    private _langFromPath(filePath: string): string {
+        const ext = filePath.split('.').pop()?.toLowerCase() || '';
+        const map: Record<string, string> = {
+            ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
+            py: 'python', java: 'java', go: 'go', rs: 'rust', rb: 'ruby', php: 'php',
+            html: 'html', css: 'css', scss: 'scss', json: 'json', yaml: 'yaml', yml: 'yaml',
+            sql: 'sql', sh: 'shellscript', md: 'markdown', xml: 'xml',
+        };
+        return map[ext] || 'plaintext';
     }
 
     // ─── HTML ──────────────────────────────────────────────────

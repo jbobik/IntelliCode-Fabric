@@ -6,16 +6,20 @@ __pycache__/
 venv/
 *.egg
 
-# Node
+# Node / TypeScript
 node_modules/
 dist/
+out/
 *.vsix
 
-# Models (large files)
+# Models (large binary files)
 models/*/
 !models/.gitkeep
 
-# Data
+# Fine-tuned adapters
+models/adapters/
+
+# RAG index & training data
 data/chroma_db/
 data/*.jsonl
 !data/.gitkeep
@@ -32,7 +36,15 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Env
 .env
 .env.local
+.env.*.local
+
+# Misc build artifacts
+*.pyc
+*.pyo
+build/
+*.tmp

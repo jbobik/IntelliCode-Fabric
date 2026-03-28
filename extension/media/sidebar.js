@@ -488,7 +488,7 @@
     //  CHAT
     // ════════════════════════════════════════════
 
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.onclick = sendMessage;
     chatInput.addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
@@ -529,8 +529,33 @@
         chatInput.value = '';
         chatInput.style.height = 'auto';
         isLoading = true;
-        sendBtn.disabled = true;
+        _showStopButton();
         showStreamProgress('Анализирую запрос...');
+    }
+
+    function cancelRequest() {
+        vscode.postMessage({ type: 'cancelRequest' });
+        _resetLoadingState();
+        removeStreamProgress();
+        removeTyping();
+        // Убираем создание cancelNote — SidebarProvider сам пришлёт chatResponse
+    }
+
+    function _showStopButton() {
+        sendBtn.classList.add('stop-mode');
+        sendBtn.innerHTML = SVG.block;
+        sendBtn.disabled = false;
+        sendBtn.title = 'Остановить генерацию';
+        sendBtn.onclick = cancelRequest;
+    }
+
+    function _resetLoadingState() {
+        isLoading = false;
+        sendBtn.classList.remove('stop-mode');
+        sendBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M3.105 2.289a.75.75 0 00-.826.95l1.414 4.925A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086l-1.414 4.926a.75.75 0 00.826.95 28.896 28.896 0 0015.293-7.154.75.75 0 000-1.115A28.897 28.897 0 003.105 2.289z"/></svg>';
+        sendBtn.disabled = false;
+        sendBtn.title = 'Отправить';
+        sendBtn.onclick = sendMessage;
     }
 
     function addMessage(role, content, extra) {
@@ -584,6 +609,47 @@
                 html += `<div class="file-change-item">
                     <span class="file-change-icon">${icon}</span>
                     <a class="file-change-path" data-file="${escHtml(fc.file)}">${escHtml(fc.file)}</a>
+                </div>`;
+            });
+            html += '</div>';
+        }
+
+        // ── Proposed Changes section ──
+        if (extra.proposed_changes && extra.proposed_changes.length) {
+            html += '<div class="proposed-changes-section">';
+            html += '<div class="proposed-changes-header">' + SVG.fileEdit + ' Предложенные изменения (' + extra.proposed_changes.length + ')</div>';
+
+            if (extra.proposed_changes.length > 1) {
+                html += '<button class="proposed-apply-all-btn">' + SVG.check + ' Применить все</button>';
+            }
+
+            extra.proposed_changes.forEach((pc, idx) => {
+                const fileName = (pc.file || '').replace(/\\/g, '/').split('/').pop() || pc.file;
+                const actionLabels = {
+                    replace: '↻ Заменить',
+                    add: '+ Добавить',
+                    delete: '✕ Удалить',
+                    create: '★ Создать',
+                };
+                const actionClasses = {
+                    replace: 'action-replace',
+                    add: 'action-add',
+                    delete: 'action-delete',
+                    create: 'action-create',
+                };
+                const lineInfo = pc.lineStart
+                    ? (pc.lineEnd ? ` :${pc.lineStart}-${pc.lineEnd}` : ` :${pc.lineStart}`)
+                    : '';
+
+                html += `<div class="proposed-change-card" data-idx="${idx}">
+                    <div class="proposed-change-info">
+                        <span class="proposed-action-badge ${actionClasses[pc.action] || ''}">${actionLabels[pc.action] || pc.action}</span>
+                        <span class="proposed-file-path">${escHtml(pc.file)}${lineInfo}</span>
+                    </div>
+                    <div class="proposed-change-actions">
+                        <button class="proposed-diff-btn" data-idx="${idx}" title="Показать diff">${SVG.search} Diff</button>
+                        <button class="proposed-apply-btn" data-idx="${idx}" title="Применить изменение">${SVG.check} Применить</button>
+                    </div>
                 </div>`;
             });
             html += '</div>';
@@ -730,17 +796,35 @@
                     actionBar.appendChild(addBtn);
 
                 } else {
-                    // ── No file info — generic insert into active editor ──
-                    const insertBtn = document.createElement('button');
-                    insertBtn.className = 'action-btn action-insert';
-                    insertBtn.innerHTML = SVG.code + ' Вставить в редактор';
-                    insertBtn.title = 'Вставить код в позицию курсора';
-                    insertBtn.addEventListener('click', () => {
-                        vscode.postMessage({ type: 'codeAction', action: 'insert', code: codeText });
-                        insertBtn.innerHTML = SVG.check + ' Вставлено';
-                        setTimeout(() => { insertBtn.innerHTML = SVG.code + ' Вставить в редактор'; }, 2000);
+                    // ── No file info — показываем Diff + Insert ──
+                    // Кнопка Diff (показывает изменения в текущем файле)
+                    const diffBtn = document.createElement('button');
+                    diffBtn.className = 'action-btn action-replace';
+                    diffBtn.innerHTML = SVG.search + ' Показать Diff';
+                    diffBtn.title = 'Показать diff в текущем файле';
+                    diffBtn.addEventListener('click', () => {
+                        vscode.postMessage({
+                            type: 'showProposedDiff',
+                            file: null, // текущий файл
+                            code: codeText,
+                            action: 'replace',
+                            lineStart: null,
+                            lineEnd: null,
+                        });
                     });
-                    actionBar.appendChild(insertBtn);
+                    actionBar.appendChild(diffBtn);
+
+                    // Кнопка Apply (заменяет в текущем файле)
+                    const applyBtn = document.createElement('button');
+                    applyBtn.className = 'action-btn action-add';
+                    applyBtn.innerHTML = SVG.check + ' Применить';
+                    applyBtn.title = 'Применить код в текущий файл';
+                    applyBtn.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'codeAction', action: 'insert', code: codeText });
+                        applyBtn.innerHTML = SVG.check + ' Применено';
+                        setTimeout(() => { applyBtn.innerHTML = SVG.check + ' Применить'; }, 2000);
+                    });
+                    actionBar.appendChild(applyBtn);
                 }
             }
 
@@ -756,6 +840,71 @@
                 if (file) vscode.postMessage({ type: 'openFile', filePath: file });
             });
         });
+
+        // ── Proposed Changes buttons ──
+        if (extra.proposed_changes && extra.proposed_changes.length) {
+            const proposedChanges = extra.proposed_changes;
+
+            // Show Diff buttons
+            bubble.querySelectorAll('.proposed-diff-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.getAttribute('data-idx'));
+                    const pc = proposedChanges[idx];
+                    if (pc) {
+                        vscode.postMessage({
+                            type: 'showProposedDiff',
+                            file: pc.file,
+                            code: pc.code,
+                            action: pc.action,
+                            lineStart: pc.lineStart,
+                            lineEnd: pc.lineEnd,
+                        });
+                    }
+                });
+            });
+
+            // Apply single change buttons
+            bubble.querySelectorAll('.proposed-apply-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.getAttribute('data-idx'));
+                    const pc = proposedChanges[idx];
+                    if (pc) {
+                        vscode.postMessage({
+                            type: 'applyProposedChange',
+                            file: pc.file,
+                            code: pc.code,
+                            action: pc.action,
+                            lineStart: pc.lineStart,
+                            lineEnd: pc.lineEnd,
+                        });
+                        btn.innerHTML = SVG.check + ' Применено';
+                        btn.disabled = true;
+                        btn.classList.add('applied');
+                        // Mark card as applied
+                        const card = btn.closest('.proposed-change-card');
+                        if (card) card.classList.add('applied');
+                    }
+                });
+            });
+
+            // Apply All button
+            const applyAllBtn = bubble.querySelector('.proposed-apply-all-btn');
+            if (applyAllBtn) {
+                applyAllBtn.addEventListener('click', () => {
+                    vscode.postMessage({
+                        type: 'applyAllProposed',
+                        changes: proposedChanges,
+                    });
+                    applyAllBtn.innerHTML = SVG.check + ' Применено';
+                    applyAllBtn.disabled = true;
+                    applyAllBtn.classList.add('applied');
+                    // Mark all cards
+                    bubble.querySelectorAll('.proposed-change-card').forEach(card => {
+                        card.classList.add('applied');
+                    });
+                });
+            }
+        }
 
         wrapper.appendChild(bubble);
         chatArea.appendChild(wrapper);
@@ -795,16 +944,15 @@
      * Returns { file, line, lineEnd, action }
      * action: 'replace' | 'add' | 'delete' | null
      */
-    function extractFileLineHints(textBefore) {
+        function extractFileLineHints(textBefore) {
         const ctx = textBefore.slice(-1000);
-
+        
         let file = null;
         let line = null;
         let lineEnd = null;
         let action = null;
 
-        // ── ACTION detection ──
-        // Explicit: "Действие: заменить/добавить/удалить" or "Action: replace/add/delete"
+        // ACTION detection — теперь на чистом тексте, regex'ы работают корректно
         const actionMatch = ctx.match(/(?:Действие|Action)\s*[:：]\s*(заменить|добавить|удалить|replace|add|delete)/i);
         if (actionMatch) {
             const a = actionMatch[1].toLowerCase();
@@ -813,20 +961,17 @@
             else if (a === 'удалить' || a === 'delete') action = 'delete';
         }
 
-        // Implicit action detection from surrounding text
         if (!action) {
-            const lowerCtx = ctx.toLowerCase();
-            // Check last 300 chars for action keywords
-            const tail = lowerCtx.slice(-400);
+            const tail = ctx.slice(-400).toLowerCase();
             if (/(?:удал(?:ить|и|яем|ите)|remove|delete)\s/.test(tail)) action = 'delete';
             else if (/(?:добав(?:ить|ь|ляем|ьте)|add|insert|вставить)\s/.test(tail)) action = 'add';
             else if (/(?:замен(?:ить|и|яем|ите)|replace|refactor|рефактор|перепиш|оптимизир|исправ|fix)/i.test(tail)) action = 'replace';
         }
 
-        // ── FILE detection ──
+        // FILE detection — чистый текст, без &quot; и т.п.
         const filePatterns = [
-            /(?:Файл|File|файл[еа]?)\s*[:：]\s*[`&quot;"]?([^\s`&<>"]+\.\w{1,6})[`&quot;"]?/gi,
-            /(?:в файле|in file|из файла|from file)\s+[`&quot;"]?([^\s`&<>"]+\.\w{1,6})[`&quot;"]?/gi,
+            /(?:Файл|File|файл[еа]?)\s*[:：]\s*[`"']?([^\s`"'\n]+\.\w{1,6})[`"']?/gi,
+            /(?:в файле|in file|из файла|from file)\s+[`"']?([^\s`"'\n]+\.\w{1,6})[`"']?/gi,
             /(?:файл|file)\s+[`]([^`]+\.\w{1,6})[`]/gi,
             /[`]([^\s`]+[\/\\][^\s`]+\.\w{1,6})[`]/g,
         ];
@@ -840,12 +985,11 @@
             }
         }
 
-        // ── LINE RANGE detection ──
+        // LINE RANGE detection
         const rangePatterns = [
             /(?:строк[аи]?|lines?|line)\s*[:：]?\s*~?(\d+)\s*[-–—]\s*(\d+)/gi,
             /\((?:строк[аи]?|lines?)\s+~?(\d+)\s*[-–—]\s*(\d+)\)/gi,
         ];
-
         for (const pattern of rangePatterns) {
             pattern.lastIndex = 0;
             const matches = [...ctx.matchAll(pattern)];
@@ -861,7 +1005,6 @@
         if (!line) {
             const singlePatterns = [
                 /(?:Строк[аи]?|Lines?|line|строк[аи]?)\s*[:：]?\s*~?(\d+)/gi,
-                /\((?:строк[аи]?|lines?|line)\s+~?(\d+)/gi,
             ];
             for (const pattern of singlePatterns) {
                 pattern.lastIndex = 0;
@@ -873,7 +1016,6 @@
             }
         }
 
-        // Default action: if we have file+lines but no action, assume 'replace'
         if (file && line && !action) action = 'replace';
 
         return { file, line, lineEnd, action };
@@ -903,16 +1045,16 @@
         });
     }
 
+// sidebar.js, в renderMarkdown() — ИЗМЕНИТЬ порядок:
+// Сохраняем оригинальный текст для извлечения хинтов ПЕРЕД escaping
+
     function renderMarkdown(text) {
         if (!text) return '';
 
-        // Убираем артефакты модели — control tokens
+        // Убираем артефакты модели
         text = text.replace(/<\|(?:system|user|assistant|end|im_start|im_end|endoftext)\|>/g, '');
         text = text.replace(/<\/?(?:system|user|assistant)>/g, '');
-
-        // Убираем эхо промпта: bare "user\n...\nassistant" blocks
         text = text.replace(/(?:^|\n)user\n[\s\S]*?\nassistant(?:\n|$)/g, '\n');
-        // Bare "user" / "assistant" on own line (leftovers from template tokens)
         text = text.replace(/^(?:user|assistant|system)\s*$/gm, '');
 
         const qMatch = text.search(/\n(?:Question|## Question|Вопрос):\s/);
@@ -920,10 +1062,14 @@
             text = text.substring(0, qMatch);
         }
 
+        // КЛЮЧЕВОЕ: сохраняем оригинал ДО escaping для парсинга хинтов
+        const originalText = text;
         const esc = escHtml(text);
 
         let result = '';
         let remaining = esc;
+        // Трекаем позицию в оригинальном тексте параллельно
+        let origPos = 0;
 
         while (remaining.length) {
             const idx = remaining.indexOf('```');
@@ -932,15 +1078,19 @@
             const textBefore = remaining.slice(0, idx);
             result += processInline(textBefore);
 
+            // Находим соответствующую позицию в оригинальном тексте
+            const origIdx = originalText.indexOf('```', origPos);
+            const originalTextBefore = origIdx >= 0 ? originalText.slice(Math.max(0, origIdx - 1000), origIdx) : '';
+
             const after = remaining.slice(idx + 3);
             const nl = after.indexOf('\n');
             let lang = '', code = after;
             if (nl !== -1 && nl < 20) { lang = after.slice(0, nl).trim(); code = after.slice(nl + 1); }
 
-            // Extract file/line/action hints from text before code block
-            const hints = extractFileLineHints(textBefore);
+            // Хинты из ОРИГИНАЛЬНОГО текста (не escape'нного!)
+            const hints = extractFileLineHints(originalTextBefore);
             const dataAttrs = [];
-            if (hints.file) dataAttrs.push(`data-file="${hints.file}"`);
+            if (hints.file) dataAttrs.push(`data-file="${escHtml(hints.file)}"`);
             if (hints.line) dataAttrs.push(`data-line="${hints.line}"`);
             if (hints.lineEnd) dataAttrs.push(`data-line-end="${hints.lineEnd}"`);
             if (hints.action) dataAttrs.push(`data-action="${hints.action}"`);
@@ -952,10 +1102,20 @@
                 result += `<pre${attrStr}><code class="language-${lang}">${code}</code></pre>`;
                 break;
             }
-
             result += `<pre${attrStr}><code class="language-${lang}">${code.slice(0, end)}</code></pre>`;
             remaining = code.slice(end + 3);
+
+            // Синхронизируем позицию в оригинале
+            if (origIdx >= 0) {
+                const origAfter = originalText.slice(origIdx + 3);
+                const origNl = origAfter.indexOf('\n');
+                let origCode = origAfter;
+                if (origNl !== -1 && origNl < 20) origCode = origAfter.slice(origNl + 1);
+                const origEnd = origCode.indexOf('```');
+                origPos = origEnd >= 0 ? originalText.indexOf('```', origIdx + 3) + 3 + origEnd + 3 : originalText.length;
+            }
         }
+
         return result;
     }
 
@@ -1101,8 +1261,7 @@
             case 'chatResponse':
                 removeStreamProgress();
                 removeTyping();
-                isLoading = false;
-                sendBtn.disabled = false;
+                _resetLoadingState();
                 if (msg.agent_trace) {
                     showAgentTrace(msg.agent_trace, msg.intent);
                 }
@@ -1113,6 +1272,7 @@
                     agent_trace: msg.agent_trace,
                     thinking: msg.thinking || '',
                     file_changes: msg.file_changes || [],
+                    proposed_changes: msg.proposed_changes || [],
                 });
                 break;
 
@@ -1150,15 +1310,13 @@
                         thinking: msg.thinking || '',
                     });
                 }
-                isLoading = false;
-                sendBtn.disabled = false;
+                _resetLoadingState();
                 break;
 
             case 'error':
                 removeStreamProgress();
                 removeTyping();
-                isLoading = false;
-                sendBtn.disabled = false;
+                _resetLoadingState();
                 addSystemMsg('⚠ ' + msg.content);
                 break;
 
